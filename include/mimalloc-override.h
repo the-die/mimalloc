@@ -27,6 +27,7 @@ not accidentally mix pointers from different allocators).
 #define strndup(s,n)            mi_strndup(s,n)
 #define realpath(f,n)           mi_realpath(f,n)
 
+// https://learn.microsoft.com/en-us/cpp/c-runtime-library/c-run-time-library-reference?view=msvc-170
 // Microsoft extensions
 #define _expand(p,n)            mi_expand(p,n)
 #define _msize(p)               mi_usable_size(p)
@@ -55,6 +56,7 @@ not accidentally mix pointers from different allocators).
 #define posix_memalign(p,a,n)   mi_posix_memalign(p,a,n)
 #define _posix_memalign(p,a,n)  mi_posix_memalign(p,a,n)
 
+// https://learn.microsoft.com/en-us/cpp/c-runtime-library/c-run-time-library-reference?view=msvc-170
 // Microsoft aligned variants
 #define _aligned_malloc(n,a)                  mi_malloc_aligned(n,a)
 #define _aligned_realloc(p,n,a)               mi_realloc_aligned(p,n,a)

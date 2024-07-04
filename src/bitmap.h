@@ -40,8 +40,9 @@ static inline mi_bitmap_index_t mi_bitmap_index_create(size_t idx, size_t bitidx
   return (idx*MI_BITMAP_FIELD_BITS) + bitidx;
 }
 
+// unused
 // Create a bit index.
-static inline mi_bitmap_index_t mi_bitmap_index_create_from_bit(size_t full_bitidx) {  
+static inline mi_bitmap_index_t mi_bitmap_index_create_from_bit(size_t full_bitidx) {
   return mi_bitmap_index_create(full_bitidx / MI_BITMAP_FIELD_BITS, full_bitidx % MI_BITMAP_FIELD_BITS);
 }
 

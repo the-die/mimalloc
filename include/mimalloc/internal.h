@@ -27,17 +27,31 @@ terms of the MIT license. A copy of the license can be found in the file
 #if defined(_MSC_VER)
 #pragma warning(disable:4127)   // suppress constant conditional warning (due to MI_SECURE paths)
 #pragma warning(disable:26812)  // unscoped enum warning
+// __declspec(noinline)
+//   https://learn.microsoft.com/en-us/cpp/cpp/noinline?view=msvc-170
 #define mi_decl_noinline        __declspec(noinline)
+// __declspec(thread)
+//   https://learn.microsoft.com/en-us/cpp/cpp/thread?view=msvc-170
 #define mi_decl_thread          __declspec(thread)
+// __declspec(align())
+//   https://learn.microsoft.com/en-us/cpp/cpp/align-cpp?view=msvc-170
 #define mi_decl_cache_align     __declspec(align(MI_CACHE_LINE))
 #define mi_decl_weak
 #elif (defined(__GNUC__) && (__GNUC__ >= 3)) || defined(__clang__) // includes clang and icc
+// __attribute__((noinline))
+//   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
 #define mi_decl_noinline        __attribute__((noinline))
+// __thread
+//   https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html
 #define mi_decl_thread          __thread
+// __attribute__((aligned()))
+//   https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html
+//   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
 #define mi_decl_cache_align     __attribute__((aligned(MI_CACHE_LINE)))
 #define mi_decl_weak            __attribute__((weak))
 #else
 #define mi_decl_noinline
+// _Thread_local or thread_local?
 #define mi_decl_thread          __thread        // hope for the best :-)
 #define mi_decl_cache_align
 #define mi_decl_weak
@@ -52,6 +66,9 @@ terms of the MIT license. A copy of the license can be found in the file
 #else
 #define mi_decl_externc
 #endif
+
+// pthread.h
+//   https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/
 
 // pthreads
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -235,9 +252,13 @@ bool        _mi_page_is_valid(mi_page_t* page);
 // ------------------------------------------------------
 
 #if defined(__GNUC__) || defined(__clang__)
+// __builtin_expect
+//   https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html
 #define mi_unlikely(x)     (__builtin_expect(!!(x),false))
 #define mi_likely(x)       (__builtin_expect(!!(x),true))
 #elif (defined(__cplusplus) && (__cplusplus >= 202002L)) || (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
+// [[unlikely]], [[likely]]
+//   https://en.cppreference.com/w/cpp/language/attributes/likely
 #define mi_unlikely(x)     (x) [[unlikely]]
 #define mi_likely(x)       (x) [[likely]]
 #else
@@ -245,10 +266,16 @@ bool        _mi_page_is_valid(mi_page_t* page);
 #define mi_likely(x)       (x)
 #endif
 
+// https://clang.llvm.org/docs/LanguageExtensions.html
+
 #ifndef __has_builtin
 #define __has_builtin(x)  0
 #endif
 
+// https://www.gnu.org/software/libc/manual/html_node/Error-Codes.html
+// https://man7.org/linux/man-pages/man3/errno.3.html
+// https://elixir.bootlin.com/linux/latest/source/include/uapi/asm-generic/errno-base.h
+// https://elixir.bootlin.com/linux/latest/source/include/uapi/asm-generic/errno.h
 
 /* -----------------------------------------------------------
   Error codes passed to `_mi_fatal_error`
@@ -277,6 +304,7 @@ bool        _mi_page_is_valid(mi_page_t* page);
 /* -----------------------------------------------------------
   Inlined definitions
 ----------------------------------------------------------- */
+// Avoid warnings for unused variables.
 #define MI_UNUSED(x)     (void)(x)
 #if (MI_DEBUG>0)
 #define MI_UNUSED_RELEASE(x)
@@ -284,6 +312,7 @@ bool        _mi_page_is_valid(mi_page_t* page);
 #define MI_UNUSED_RELEASE(x)  MI_UNUSED(x)
 #endif
 
+// Used for initialization.
 #define MI_INIT4(x)   x(),x(),x(),x()
 #define MI_INIT8(x)   MI_INIT4(x),MI_INIT4(x)
 #define MI_INIT16(x)  MI_INIT8(x),MI_INIT8(x)
@@ -343,12 +372,14 @@ static inline void* mi_align_down_ptr(void* p, size_t alignment) {
 }
 
 
+// _mi_divide_up: unsigned
 // Divide upwards: `s <= _mi_divide_up(s,d)*d < s+d`.
 static inline uintptr_t _mi_divide_up(uintptr_t size, size_t divider) {
   mi_assert_internal(divider != 0);
   return (divider == 0 ? size : ((size + divider - 1) / divider));
 }
 
+// mi_mem_is_zero: performance
 // Is memory zero initialized?
 static inline bool mi_mem_is_zero(const void* p, size_t size) {
   for (size_t i = 0; i < size; i++) {
@@ -361,6 +392,7 @@ static inline bool mi_mem_is_zero(const void* p, size_t size) {
 // Align a byte size to a size in _machine words_,
 // i.e. byte size == `wsize*sizeof(void*)`.
 static inline size_t _mi_wsize_from_size(size_t size) {
+  // size <= (maximum value of size_t) - sizeof(uintptr_t)
   mi_assert_internal(size <= SIZE_MAX - sizeof(uintptr_t));
   return (size + sizeof(uintptr_t) - 1) / sizeof(uintptr_t);
 }
@@ -431,13 +463,18 @@ static inline uintptr_t _mi_ptr_cookie(const void* p) {
   Pages
 ----------------------------------------------------------- */
 
+// fast path: get page from heap->pages_free_direct
 static inline mi_page_t* _mi_heap_get_free_small_page(mi_heap_t* heap, size_t size) {
+  // ensure size satisfy MI_SMALL_SIZE_MAX + MI_PADDING_SIZE
+  // see types.h `struct mi_heap_s`
   mi_assert_internal(size <= (MI_SMALL_SIZE_MAX + MI_PADDING_SIZE));
   const size_t idx = _mi_wsize_from_size(size);
+  // ensure idx is correct
   mi_assert_internal(idx < MI_PAGES_DIRECT);
   return heap->pages_free_direct[idx];
 }
 
+// Pages and their meta data are allocated in a segment.
 // Segment that contains the pointer
 // Large aligned blocks may be aligned at N*MI_SEGMENT_SIZE (inside a huge segment > MI_SEGMENT_SIZE),
 // and we need align "down" to the segment info which is `MI_SEGMENT_SIZE` bytes before it;
@@ -801,6 +838,7 @@ static inline mi_memid_t _mi_memid_create_os(bool committed, bool is_zero, bool 
 // Fast "random" shuffle
 // -------------------------------------------------------------------
 
+// random shuffle
 static inline uintptr_t _mi_random_shuffle(uintptr_t x) {
   if (x==0) { x = 17; }   // ensure we don't get stuck in generating zeros
 #if (MI_INTPTR_SIZE==8)
@@ -844,6 +882,11 @@ static inline size_t _mi_os_numa_node_count(void) {
 // -----------------------------------------------------------------------
 // Count bits: trailing or leading zeros (with MI_INTPTR_BITS on all zero)
 // -----------------------------------------------------------------------
+
+// https://en.wikipedia.org/wiki/Find_first_set
+//
+// https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html
+//   __builtin_clzl, __builtin_clzll, __builtin_ctzl, __builtin_ctzll
 
 #if defined(__GNUC__)
 

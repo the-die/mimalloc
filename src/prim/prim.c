@@ -8,6 +8,9 @@ terms of the MIT license. A copy of the license can be found in the file
 // Select the implementation of the primitives
 // depending on the OS.
 
+// https://learn.microsoft.com/en-us/cpp/preprocessor/predefined-macros?view=msvc-170
+// https://gcc.gnu.org/onlinedocs/cpp/System-specific-Predefined-Macros.html
+
 #if defined(_WIN32)
 #include "windows/prim.c"  // VirtualAlloc (Windows)
 

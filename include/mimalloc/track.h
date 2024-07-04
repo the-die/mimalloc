@@ -43,6 +43,9 @@ defined, undefined, or not accessible at all:
 
 -------------------------------------------------------------------------------------------------------*/
 
+// https://valgrind.org/docs/manual/manual-core-adv.html
+// https://github.com/google/sanitizers/wiki/AddressSanitizerManualPoisoning
+
 #if MI_TRACK_VALGRIND
 // valgrind tool
 

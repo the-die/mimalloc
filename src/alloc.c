@@ -21,10 +21,19 @@ terms of the MIT license. A copy of the license can be found in the file
 #include "free.c"
 #undef MI_IN_ALLOC_C
 
+// extern
+//   https://en.cppreference.com/w/c/language/storage_duration
+//   https://en.cppreference.com/w/cpp/language/storage_duration
+
+// inline
+//   https://en.cppreference.com/w/c/language/inline
+//   https://en.cppreference.com/w/cpp/language/inline
+
 // ------------------------------------------------------
 // Allocation
 // ------------------------------------------------------
 
+// internal alloc from page
 // Fast allocation in a page: just pop from the free list.
 // Fall back to generic allocation only if the list is empty.
 // Note: in release mode the (inlined) routine is about 7 instructions with a single test.
@@ -32,6 +41,7 @@ extern inline void* _mi_page_malloc_zero(mi_heap_t* heap, mi_page_t* page, size_
 {
   mi_assert_internal(page->block_size == 0 /* empty heap */ || mi_page_block_size(page) >= size);
   mi_block_t* const block = page->free;
+  // slow path
   if mi_unlikely(block == NULL) {
     return _mi_malloc_generic(heap, size, zero, 0);
   }
@@ -113,12 +123,16 @@ extern void* _mi_page_malloc_zeroed(mi_heap_t* heap, mi_page_t* page, size_t siz
   return _mi_page_malloc_zero(heap,page,size,true);
 }
 
+// fast path
 static inline mi_decl_restrict void* mi_heap_malloc_small_zero(mi_heap_t* heap, size_t size, bool zero) mi_attr_noexcept {
+  // ensure the heap is not NULL
   mi_assert(heap != NULL);
   #if MI_DEBUG
   const uintptr_t tid = _mi_thread_id();
+  // ensure the heap thread ID is equal to current thread ID
   mi_assert(heap->thread_id == 0 || heap->thread_id == tid); // heaps are thread local
   #endif
+  // ensure size satisfy MI_SMALL_SIZE_MAX
   mi_assert(size <= MI_SMALL_SIZE_MAX);
   #if (MI_PADDING)
   if (size == 0) { size = sizeof(void*); }
@@ -142,23 +156,30 @@ static inline mi_decl_restrict void* mi_heap_malloc_small_zero(mi_heap_t* heap, 
   return p;
 }
 
+// fast path
 // allocate a small block
 mi_decl_nodiscard extern inline mi_decl_restrict void* mi_heap_malloc_small(mi_heap_t* heap, size_t size) mi_attr_noexcept {
   return mi_heap_malloc_small_zero(heap, size, false);
 }
 
+// fast path
 mi_decl_nodiscard extern inline mi_decl_restrict void* mi_malloc_small(size_t size) mi_attr_noexcept {
   return mi_heap_malloc_small(mi_prim_get_default_heap(), size);
 }
 
+// internal _mi_heap_malloc_zero_ex
 // The main allocation function
 extern inline void* _mi_heap_malloc_zero_ex(mi_heap_t* heap, size_t size, bool zero, size_t huge_alignment) mi_attr_noexcept {
+  // fast path
   if mi_likely(size <= MI_SMALL_SIZE_MAX) {
     mi_assert_internal(huge_alignment == 0);
     return mi_heap_malloc_small_zero(heap, size, zero);
   }
+  // slow path
   else {
+    // ensure the heap is not NULL
     mi_assert(heap!=NULL);
+    // ensure the heap thread ID is equal to current thread ID
     mi_assert(heap->thread_id == 0 || heap->thread_id == _mi_thread_id());   // heaps are thread local
     void* const p = _mi_malloc_generic(heap, size + MI_PADDING_SIZE, zero, huge_alignment);  // note: size can overflow but it is detected in malloc_generic
     mi_track_malloc(p,size,zero);
@@ -177,27 +198,36 @@ extern inline void* _mi_heap_malloc_zero_ex(mi_heap_t* heap, size_t size, bool z
   }
 }
 
+// internal _mi_heap_malloc_zero
 extern inline void* _mi_heap_malloc_zero(mi_heap_t* heap, size_t size, bool zero) mi_attr_noexcept {
   return _mi_heap_malloc_zero_ex(heap, size, zero, 0);
 }
 
+// alloc from heap
 mi_decl_nodiscard extern inline mi_decl_restrict void* mi_heap_malloc(mi_heap_t* heap, size_t size) mi_attr_noexcept {
   return _mi_heap_malloc_zero(heap, size, false);
 }
 
+// malloc
+//   https://man7.org/linux/man-pages/man3/malloc.3.html
 mi_decl_nodiscard extern inline mi_decl_restrict void* mi_malloc(size_t size) mi_attr_noexcept {
   return mi_heap_malloc(mi_prim_get_default_heap(), size);
 }
 
+// like mi_malloc_small
 // zero initialized small block
 mi_decl_nodiscard mi_decl_restrict void* mi_zalloc_small(size_t size) mi_attr_noexcept {
   return mi_heap_malloc_small_zero(mi_prim_get_default_heap(), size, true);
 }
 
+// like mi_heap_malloc
 mi_decl_nodiscard extern inline mi_decl_restrict void* mi_heap_zalloc(mi_heap_t* heap, size_t size) mi_attr_noexcept {
   return _mi_heap_malloc_zero(heap, size, true);
 }
 
+// like mi_malloc
+// calloc
+//   https://man7.org/linux/man-pages/man3/malloc.3.html
 mi_decl_nodiscard mi_decl_restrict void* mi_zalloc(size_t size) mi_attr_noexcept {
   return mi_heap_zalloc(mi_prim_get_default_heap(),size);
 }
@@ -209,6 +239,9 @@ mi_decl_nodiscard extern inline mi_decl_restrict void* mi_heap_calloc(mi_heap_t*
   return mi_heap_zalloc(heap,total);
 }
 
+// like mi_malloc
+// calloc
+//   https://man7.org/linux/man-pages/man3/malloc.3.html
 mi_decl_nodiscard mi_decl_restrict void* mi_calloc(size_t count, size_t size) mi_attr_noexcept {
   return mi_heap_calloc(mi_prim_get_default_heap(),count,size);
 }
@@ -581,6 +614,10 @@ mi_decl_nodiscard void* mi_new_reallocn(void* p, size_t newcount, size_t size) {
 // ensure explicit external inline definitions are emitted!
 // ------------------------------------------------------
 
+// The purpose of this code in mimalloc is to ensure that certain functions are explicitly included
+// in the final compiled binary, even if they are defined as inline functions. By referencing these
+// functions in a global array, the compiler is forced to emit their definitions, making sure they
+// are available for linking.
 #ifdef __cplusplus
 void* _mi_externs[] = {
   (void*)&_mi_page_malloc,

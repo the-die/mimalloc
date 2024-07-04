@@ -12,6 +12,7 @@ terms of the MIT license. A copy of the license can be found in the file
 #include <stdlib.h>  // atexit
 
 
+// see types.h `struct mi_page_s`
 // Empty page used to initialize the small free pages array
 const mi_page_t _mi_page_empty = {
   0,
@@ -39,18 +40,20 @@ const mi_page_t _mi_page_empty = {
 
 #define MI_PAGE_EMPTY() ((mi_page_t*)&_mi_page_empty)
 
+// 128 * 8 == 1024
 #if (MI_SMALL_WSIZE_MAX==128)
-#if (MI_PADDING>0) && (MI_INTPTR_SIZE >= 8)
-#define MI_SMALL_PAGES_EMPTY  { MI_INIT128(MI_PAGE_EMPTY), MI_PAGE_EMPTY(), MI_PAGE_EMPTY() }
-#elif (MI_PADDING>0)
-#define MI_SMALL_PAGES_EMPTY  { MI_INIT128(MI_PAGE_EMPTY), MI_PAGE_EMPTY(), MI_PAGE_EMPTY(), MI_PAGE_EMPTY() }
+  #if (MI_PADDING>0) && (MI_INTPTR_SIZE >= 8)
+    #define MI_SMALL_PAGES_EMPTY  { MI_INIT128(MI_PAGE_EMPTY), MI_PAGE_EMPTY(), MI_PAGE_EMPTY() }
+  #elif (MI_PADDING>0)
+    #define MI_SMALL_PAGES_EMPTY  { MI_INIT128(MI_PAGE_EMPTY), MI_PAGE_EMPTY(), MI_PAGE_EMPTY(), MI_PAGE_EMPTY() }
+  #else
+    #define MI_SMALL_PAGES_EMPTY  { MI_INIT128(MI_PAGE_EMPTY), MI_PAGE_EMPTY() }
+  #endif
 #else
-#define MI_SMALL_PAGES_EMPTY  { MI_INIT128(MI_PAGE_EMPTY), MI_PAGE_EMPTY() }
-#endif
-#else
-#error "define right initialization sizes corresponding to MI_SMALL_WSIZE_MAX"
+  #error "define right initialization sizes corresponding to MI_SMALL_WSIZE_MAX"
 #endif
 
+// see types.h `struct mi_page_queue_s`
 // Empty page queues for every bin
 #define QNULL(sz)  { NULL, NULL, (sz)*sizeof(uintptr_t) }
 #define MI_PAGE_QUEUES_EMPTY \
@@ -67,6 +70,7 @@ const mi_page_t _mi_page_empty = {
     QNULL(MI_MEDIUM_OBJ_WSIZE_MAX + 1  /* 655360, Huge queue */), \
     QNULL(MI_MEDIUM_OBJ_WSIZE_MAX + 2) /* Full queue */ }
 
+// see types.h `struct mi_stat_count_s`
 #define MI_STAT_COUNT_NULL()  {0,0,0,0}
 
 // Empty statistics
@@ -76,6 +80,7 @@ const mi_page_t _mi_page_empty = {
 #define MI_STAT_COUNT_END_NULL()
 #endif
 
+// see types.h `struct mi_stat_s` and `struct mi_stat_counter_s`
 #define MI_STATS_NULL  \
   MI_STAT_COUNT_NULL(), MI_STAT_COUNT_NULL(), \
   MI_STAT_COUNT_NULL(), MI_STAT_COUNT_NULL(), \
@@ -92,6 +97,7 @@ const mi_page_t _mi_page_empty = {
   MI_STAT_COUNT_END_NULL()
 
 
+// see types.h `struct mi_span_queue_s`
 // Empty slice span queues for every bin
 #define SQNULL(sz)  { NULL, NULL, sz }
 #define MI_SEGMENT_SPAN_QUEUES_EMPTY \
@@ -112,6 +118,7 @@ const mi_page_t _mi_page_empty = {
 // may lead to allocation itself on some platforms)
 // --------------------------------------------------------
 
+// see type.h `struct mi_heap_s`
 mi_decl_cache_align const mi_heap_t _mi_heap_empty = {
   NULL,
   MI_ATOMIC_VAR_INIT(NULL),
@@ -132,6 +139,7 @@ mi_decl_cache_align const mi_heap_t _mi_heap_empty = {
 #define tld_empty_stats  ((mi_stats_t*)((uint8_t*)&tld_empty + offsetof(mi_tld_t,stats)))
 #define tld_empty_os     ((mi_os_tld_t*)((uint8_t*)&tld_empty + offsetof(mi_tld_t,os)))
 
+// see type.h `struct mi_tld_s`
 mi_decl_cache_align static const mi_tld_t tld_empty = {
   0,
   false,
@@ -141,15 +149,18 @@ mi_decl_cache_align static const mi_tld_t tld_empty = {
   { MI_STATS_NULL }       // stats
 };
 
+// get thread id
 mi_threadid_t _mi_thread_id(void) mi_attr_noexcept {
   return _mi_prim_thread_id();
 }
 
+// `_mi_heap_default` is initialized somewhere.
 // the thread-local default heap for allocation
 mi_decl_thread mi_heap_t* _mi_heap_default = (mi_heap_t*)&_mi_heap_empty;
 
 extern mi_heap_t _mi_heap_main;
 
+// see type.h `struct mi_tld_s`
 static mi_tld_t tld_main = {
   0, false,
   &_mi_heap_main, & _mi_heap_main,
@@ -158,6 +169,7 @@ static mi_tld_t tld_main = {
   { MI_STATS_NULL }       // stats
 };
 
+// see type.h `struct mi_heap_s`
 mi_heap_t _mi_heap_main = {
   &tld_main,
   MI_ATOMIC_VAR_INIT(NULL),
@@ -177,10 +189,12 @@ mi_heap_t _mi_heap_main = {
 
 bool _mi_process_is_initialized = false;  // set to `true` in `mi_process_init`.
 
+// see types.h `struct mi_stat_s`
 mi_stats_t _mi_stats_main = { MI_STATS_NULL };
 
 
 static void mi_heap_main_init(void) {
+  // random cookie to verify pointers (see `_mi_ptr_cookie`)
   if (_mi_heap_main.cookie == 0) {
     _mi_heap_main.thread_id = _mi_thread_id();
     _mi_heap_main.cookie = 1;
@@ -190,6 +204,7 @@ static void mi_heap_main_init(void) {
       _mi_random_init(&_mi_heap_main.random);
     #endif
     _mi_heap_main.cookie  = _mi_heap_random_next(&_mi_heap_main);
+    // two random keys used to encode the `thread_delayed_free` list
     _mi_heap_main.keys[0] = _mi_heap_random_next(&_mi_heap_main);
     _mi_heap_main.keys[1] = _mi_heap_random_next(&_mi_heap_main);
   }
@@ -696,6 +711,7 @@ static void mi_cdecl mi_process_done(void) {
   #pragma data_seg()
 
 #elif defined(__cplusplus)
+  // https://en.cppreference.com/w/cpp/language/initialization
   // C++: use static initialization to detect process start
   static bool _mi_process_init(void) {
     mi_process_load();
@@ -704,6 +720,8 @@ static void mi_cdecl mi_process_done(void) {
   static bool mi_initialized = _mi_process_init();
 
 #elif defined(__GNUC__) || defined(__clang__)
+  // constructor
+  //   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
   // GCC,Clang: use the constructor attribute
   static void __attribute__((constructor)) _mi_process_init(void) {
     mi_process_load();

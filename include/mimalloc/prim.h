@@ -331,7 +331,8 @@ static inline mi_heap_t* mi_prim_get_default_heap(void) {
   return heap;
 }
 
-#elif defined(MI_TLS_PTHREAD_SLOT_OFS)
+// __OpenBSD__
+#elif defined(MI_TLS_PTHREAD_SLOT_OFS)  
 
 static inline mi_heap_t** mi_prim_tls_pthread_heap_slot(void) {
   pthread_t self = pthread_self();
@@ -349,6 +350,7 @@ static inline mi_heap_t* mi_prim_get_default_heap(void) {
   return heap;
 }
 
+// __ANDROID__
 #elif defined(MI_TLS_PTHREAD)
 
 extern pthread_key_t _mi_heap_default_key;
@@ -359,7 +361,9 @@ static inline mi_heap_t* mi_prim_get_default_heap(void) {
 
 #else // default using a thread local variable; used on most platforms.
 
+// Each thread gets the default heap.
 static inline mi_heap_t* mi_prim_get_default_heap(void) {
+  // MI_TLS_RECURSE_GUARD?
   #if defined(MI_TLS_RECURSE_GUARD)
   if (mi_unlikely(!_mi_process_is_initialized)) return _mi_heap_main_get();
   #endif

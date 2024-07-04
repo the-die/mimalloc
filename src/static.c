@@ -4,6 +4,9 @@ This is free software; you can redistribute it and/or modify it under the
 terms of the MIT license. A copy of the license can be found in the file
 "LICENSE" at the root of this distribution.
 -----------------------------------------------------------------------------*/
+
+// https://www.gnu.org/software/libc/manual/html_node/Feature-Test-Macros.html
+//   _DEFAULT_SOURCE, _XOPEN_SOURCE, _POSIX_C_SOURCE
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE
 #endif

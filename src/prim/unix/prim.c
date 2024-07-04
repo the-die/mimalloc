@@ -7,9 +7,15 @@ terms of the MIT license. A copy of the license can be found in the file
 
 // This file is included in `src/prim/prim.c`
 
+// _DEFAULT_SOURCE
+//   https://www.gnu.org/software/libc/manual/html_node/Feature-Test-Macros.html
+
 #ifndef _DEFAULT_SOURCE
 #define _DEFAULT_SOURCE   // ensure mmap flags and syscall are defined
 #endif
+
+// _XOPEN_SOURCE, _POSIX_C_SOURCE
+//   https://www.gnu.org/software/libc/manual/html_node/Feature-Test-Macros.html
 
 #if defined(__sun)
 // illumos provides new mman.h api when any of these are defined
@@ -28,6 +34,9 @@ terms of the MIT license. A copy of the license can be found in the file
 #include <sys/mman.h>  // mmap
 #include <unistd.h>    // sysconf
 #include <fcntl.h>     // open, close, read, access
+
+// sys/mman.h
+//   https://man7.org/linux/man-pages/man0/sys_mman.h.0p.html
 
 #if defined(__linux__)
   #include <features.h>
@@ -59,6 +68,9 @@ terms of the MIT license. A copy of the license can be found in the file
 
 #if defined(__linux__) || defined(__FreeBSD__)
   #define MI_HAS_SYSCALL_H
+  // sys/syscall.h
+  //   https://www.gnu.org/software/libc/manual/html_node/System-Calls.html
+  //   https://man7.org/linux/man-pages/man2/syscall.2.html
   #include <sys/syscall.h>
 #endif
 
@@ -72,15 +84,21 @@ terms of the MIT license. A copy of the license can be found in the file
 
 #if defined(MI_HAS_SYSCALL_H) && defined(SYS_open) && defined(SYS_close) && defined(SYS_read) && defined(SYS_access)
 
+// https://man7.org/linux/man-pages/man2/syscalls.2.html
+
+// https://man7.org/linux/man-pages/man2/open.2.html
 static inline int mi_prim_open(const char* fpath, int open_flags) {
   return syscall(SYS_open,fpath,open_flags,0);
 }
+// https://man7.org/linux/man-pages/man2/read.2.html
 static inline ssize_t mi_prim_read(int fd, void* buf, size_t bufsize) {
   return syscall(SYS_read,fd,buf,bufsize);
 }
+// https://man7.org/linux/man-pages/man2/close.2.html
 static inline int mi_prim_close(int fd) {
   return syscall(SYS_close,fd);
 }
+// https://man7.org/linux/man-pages/man2/access.2.html
 static inline int mi_prim_access(const char *fpath, int mode) {
   return syscall(SYS_access,fpath,mode);
 }
@@ -108,11 +126,17 @@ static inline int mi_prim_access(const char *fpath, int mode) {
 // init
 //---------------------------------------------
 
+// overcommit
+//   https://www.kernel.org/doc/Documentation/vm/overcommit-accounting
+//   https://www.baeldung.com/linux/overcommit-modes
+//
+// /proc/sys/vm/overcommit_memory
+//   https://man7.org/linux/man-pages/man5/proc.5.html
 static bool unix_detect_overcommit(void) {
   bool os_overcommit = true;
 #if defined(__linux__)
   int fd = mi_prim_open("/proc/sys/vm/overcommit_memory", O_RDONLY);
-	if (fd >= 0) {
+  if (fd >= 0) {
     char buf[32];
     ssize_t nread = mi_prim_read(fd, &buf, sizeof(buf));
     mi_prim_close(fd);
@@ -134,6 +158,8 @@ static bool unix_detect_overcommit(void) {
   return os_overcommit;
 }
 
+// sysconf
+//   https://man7.org/linux/man-pages/man3/sysconf.3.html
 void _mi_prim_mem_init( mi_os_mem_config_t* config )
 {
   long psize = sysconf(_SC_PAGESIZE);
@@ -170,6 +196,8 @@ void _mi_prim_mem_init( mi_os_mem_config_t* config )
 // free
 //---------------------------------------------
 
+// munmap
+//   https://man7.org/linux/man-pages/man3/munmap.3p.html
 int _mi_prim_free(void* addr, size_t size ) {
   bool err = (munmap(addr, size) == -1);
   return (err ? errno : 0);
@@ -180,6 +208,8 @@ int _mi_prim_free(void* addr, size_t size ) {
 // mmap
 //---------------------------------------------
 
+// madvise
+//   https://man7.org/linux/man-pages/man2/madvise.2.html
 static int unix_madvise(void* addr, size_t size, int advice) {
   #if defined(__sun)
   return madvise((caddr_t)addr, size, advice);  // Solaris needs cast (issue #520)
@@ -188,9 +218,13 @@ static int unix_madvise(void* addr, size_t size, int advice) {
   #endif
 }
 
+// mmap
+//   https://man7.org/linux/man-pages/man2/mmap.2.html
 static void* unix_mmap_prim(void* addr, size_t size, size_t try_alignment, int protect_flags, int flags, int fd) {
   MI_UNUSED(try_alignment);
   void* p = NULL;
+  // MAP_ALIGNED
+  //   https://man.freebsd.org/cgi/man.cgi?mmap(2)
   #if defined(MAP_ALIGNED)  // BSD
   if (addr == NULL && try_alignment > 1 && (try_alignment % _mi_os_page_size()) == 0) {
     size_t n = mi_bsr(try_alignment);
@@ -204,6 +238,8 @@ static void* unix_mmap_prim(void* addr, size_t size, size_t try_alignment, int p
       // fall back to regular mmap
     }
   }
+  // MAP_ALIGN
+  //   https://docs.oracle.com/cd/E88353_01/html/E37841/mmap-2.html
   #elif defined(MAP_ALIGN)  // Solaris
   if (addr == NULL && try_alignment > 1 && (try_alignment % _mi_os_page_size()) == 0) {
     p = mmap((void*)try_alignment, size, protect_flags, flags | MAP_ALIGN, fd, 0);  // addr parameter is the required alignment
@@ -238,29 +274,42 @@ static void* unix_mmap_prim(void* addr, size_t size, size_t try_alignment, int p
 }
 
 static int unix_mmap_fd(void) {
+  // VM_MAKE_TAG
+  //   https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/mmap.2.html
   #if defined(VM_MAKE_TAG)
   // macOS: tracking anonymous page with a specific ID. (All up to 98 are taken officially but LLVM sanitizers had taken 99)
   int os_tag = (int)mi_option_get(mi_option_os_tag);
   if (os_tag < 100 || os_tag > 255) { os_tag = 100; }
   return VM_MAKE_TAG(os_tag);
   #else
+  // see MAP_ANONYMOUS
   return -1;
   #endif
 }
 
 static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protect_flags, bool large_only, bool allow_large, bool* is_large) {
+  // MAP_ANONYMOUS
+  //   https://man7.org/linux/man-pages/man2/mmap.2.html
   #if !defined(MAP_ANONYMOUS)
   #define MAP_ANONYMOUS  MAP_ANON
   #endif
+  // MAP_NORESERVE
+  //   https://man7.org/linux/man-pages/man2/mmap.2.html
   #if !defined(MAP_NORESERVE)
   #define MAP_NORESERVE  0
   #endif
   void* p = NULL;
   const int fd = unix_mmap_fd();
+  // MAP_PRIVATE
+  //   https://man7.org/linux/man-pages/man2/mmap.2.html
   int flags = MAP_PRIVATE | MAP_ANONYMOUS;
   if (_mi_os_has_overcommit()) {
+    // MAP_NORESERVE
+    //   https://man7.org/linux/man-pages/man2/mmap.2.html
     flags |= MAP_NORESERVE;
   }
+  // PROT_MAZ
+  //   https://man.freebsd.org/cgi/man.cgi?mmap(2)
   #if defined(PROT_MAX)
   protect_flags |= PROT_MAX(PROT_READ | PROT_WRITE); // BSD
   #endif
@@ -278,12 +327,18 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
     else {
       int lflags = flags & ~MAP_NORESERVE;  // using NORESERVE on huge pages seems to fail on Linux
       int lfd = fd;
+      // MAP_ALIGNED_SUPER
+      //   https://man.freebsd.org/cgi/man.cgi?mmap(2)
       #ifdef MAP_ALIGNED_SUPER
       lflags |= MAP_ALIGNED_SUPER;
       #endif
+      // MAP_HUGETLB
+      //   https://man7.org/linux/man-pages/man2/mmap.2.html
       #ifdef MAP_HUGETLB
       lflags |= MAP_HUGETLB;
       #endif
+      // MAP_HUGE_1GB
+      //   https://man7.org/linux/man-pages/man2/mmap.2.html
       #ifdef MAP_HUGE_1GB
       static bool mi_huge_pages_available = true;
       if ((size % MI_GiB) == 0 && mi_huge_pages_available) {
@@ -292,10 +347,14 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
       else
       #endif
       {
+        // MAP_HUGE_2MB
+        //   https://man7.org/linux/man-pages/man2/mmap.2.html
         #ifdef MAP_HUGE_2MB
         lflags |= MAP_HUGE_2MB;
         #endif
       }
+      // VM_FLAGS_SUPERPAGE_SIZE_2MB
+      //   https://www.unix.com/man-page/osx/2/mmap
       #ifdef VM_FLAGS_SUPERPAGE_SIZE_2MB
       lfd |= VM_FLAGS_SUPERPAGE_SIZE_2MB;
       #endif
@@ -303,6 +362,8 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
         // try large OS page allocation
         *is_large = true;
         p = unix_mmap_prim(addr, size, try_alignment, protect_flags, lflags, lfd);
+        // MAP_HUGE_1GB
+        //   https://man7.org/linux/man-pages/man2/mmap.2.html
         #ifdef MAP_HUGE_1GB
         if (p == NULL && (lflags & MAP_HUGE_1GB) == MAP_HUGE_1GB) {
           mi_huge_pages_available = false; // don't try huge 1GiB pages again
@@ -323,6 +384,8 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
     *is_large = false;
     p = unix_mmap_prim(addr, size, try_alignment, protect_flags, flags, fd);
     if (p != NULL) {
+      // MADV_HUGEPAGE
+      //   https://man7.org/linux/man-pages/man2/madvise.2.html
       #if defined(MADV_HUGEPAGE)
       // Many Linux systems don't allow MAP_HUGETLB but they support instead
       // transparent huge pages (THP). Generally, it is not required to call `madvise` with MADV_HUGE
@@ -350,6 +413,7 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
   return p;
 }
 
+// mimalloc primitive allocate
 // Note: the `try_alignment` is just a hint and the returned pointer is not guaranteed to be aligned.
 int _mi_prim_alloc(size_t size, size_t try_alignment, bool commit, bool allow_large, bool* is_large, bool* is_zero, void** addr) {
   mi_assert_internal(size > 0 && (size % _mi_os_page_size()) == 0);
@@ -386,6 +450,8 @@ int _mi_prim_commit(void* start, size_t size, bool* is_zero) {
   // we sometimes call commit on a range with still partially committed
   // memory and `mprotect` does not zero the range.
   *is_zero = false;
+  // mprotect
+  //   https://man7.org/linux/man-pages/man2/mprotect.2.html
   int err = mprotect(start, size, (PROT_READ | PROT_WRITE));
   if (err != 0) {
     err = errno;
@@ -396,12 +462,16 @@ int _mi_prim_commit(void* start, size_t size, bool* is_zero) {
 
 int _mi_prim_decommit(void* start, size_t size, bool* needs_recommit) {
   int err = 0;
+  // MADV_DONTNEED
+  //   https://man7.org/linux/man-pages/man2/madvise.2.html
   // decommit: use MADV_DONTNEED as it decreases rss immediately (unlike MADV_FREE)
   err = unix_madvise(start, size, MADV_DONTNEED);
   #if !MI_DEBUG && !MI_SECURE
     *needs_recommit = false;
   #else
     *needs_recommit = true;
+    // PROT_NONE
+    //   https://man7.org/linux/man-pages/man2/mprotect.2.html
     mprotect(start, size, PROT_NONE);
   #endif
   /*
@@ -415,7 +485,10 @@ int _mi_prim_decommit(void* start, size_t size, bool* needs_recommit) {
 }
 
 int _mi_prim_reset(void* start, size_t size) {
-  // We try to use `MADV_FREE` as that is the fastest. A drawback though is that it
+  // MADV_FREE
+  //   https://man7.org/linux/man-pages/man2/madvise.2.html
+  //
+  // We try to use `MADV_FREE` as that is the fastest. A drawback though is that it 
   // will not reduce the `rss` stats in tools like `top` even though the memory is available
   // to other processes. With the default `MIMALLOC_PURGE_DECOMMITS=1` we ensure that by
   // default `MADV_DONTNEED` is used though.
@@ -454,6 +527,8 @@ int _mi_prim_protect(void* start, size_t size, bool protect) {
 #define MPOL_PREFERRED 1
 #endif
 
+// mbind
+//   https://man7.org/linux/man-pages/man2/mbind.2.html
 #if defined(MI_HAS_SYSCALL_H) && defined(SYS_mbind)
 static long mi_prim_mbind(void* start, unsigned long len, unsigned long mode, const unsigned long* nmask, unsigned long maxnode, unsigned flags) {
   return syscall(SYS_mbind, start, len, mode, nmask, maxnode, flags);
@@ -500,6 +575,10 @@ int _mi_prim_alloc_huge_os_pages(void* hint_addr, size_t size, int numa_node, bo
 
 #if defined(__linux__)
 
+// NUMA
+//   https://man7.org/linux/man-pages/man7/numa.7.html
+//   https://man7.org/linux/man-pages/man3/numa.3.html
+
 size_t _mi_prim_numa_node(void) {
   #if defined(MI_HAS_SYSCALL_H) && defined(SYS_getcpu)
     unsigned long node = 0;
@@ -512,6 +591,8 @@ size_t _mi_prim_numa_node(void) {
   #endif
 }
 
+// /sys/devices/system/node/node
+//   https://www.kernel.org/doc/Documentation/ABI/stable/sysfs-devices-node
 size_t _mi_prim_numa_node_count(void) {
   char buf[128];
   unsigned node = 0;
@@ -576,6 +657,9 @@ size_t _mi_prim_numa_node_count(void) {
 
 #include <time.h>
 
+// CLOCK_REALTIME, CLOCK_MONOTONIC, clock_gettime
+//   https://man7.org/linux/man-pages/man2/clock_gettime.2.html
+
 #if defined(CLOCK_REALTIME) || defined(CLOCK_MONOTONIC)
 
 mi_msecs_t _mi_prim_clock_now(void) {
@@ -589,6 +673,9 @@ mi_msecs_t _mi_prim_clock_now(void) {
 }
 
 #else
+
+// CLOCKS_PER_SEC, clock
+//   https://man7.org/linux/man-pages/man3/clock.3.html
 
 // low resolution timer
 mi_msecs_t _mi_prim_clock_now(void) {
@@ -626,6 +713,9 @@ mi_msecs_t _mi_prim_clock_now(void) {
 static mi_msecs_t timeval_secs(const struct timeval* tv) {
   return ((mi_msecs_t)tv->tv_sec * 1000L) + ((mi_msecs_t)tv->tv_usec / 1000L);
 }
+
+// getrusage
+//   https://man7.org/linux/man-pages/man2/getrusage.2.html
 
 void _mi_prim_process_info(mi_process_info_t* pinfo)
 {
@@ -688,6 +778,8 @@ void _mi_prim_process_info(mi_process_info_t* pinfo)
 // Output
 //----------------------------------------------------------------
 
+// fputs
+//   https://man7.org/linux/man-pages/man3/fputs.3p.html
 void _mi_prim_out_stderr( const char* msg ) {
   fputs(msg,stderr);
 }
@@ -696,6 +788,9 @@ void _mi_prim_out_stderr( const char* msg ) {
 //----------------------------------------------------------------
 // Environment
 //----------------------------------------------------------------
+
+// __has_include
+//   https://gcc.gnu.org/onlinedocs/cpp/index.html
 
 #if !defined(MI_USE_ENVIRON) || (MI_USE_ENVIRON!=0)
 // On Posix systemsr use `environ` to access environment variables
@@ -706,6 +801,8 @@ static char** mi_get_environ(void) {
   return (*_NSGetEnviron());
 }
 #else
+// environ
+//   https://man7.org/linux/man-pages/man7/environ.7.html
 extern char** environ;
 static char** mi_get_environ(void) {
   return environ;
@@ -729,6 +826,8 @@ bool _mi_prim_getenv(const char* name, char* result, size_t result_size) {
   return false;
 }
 #else
+// getenv
+//   https://man7.org/linux/man-pages/man3/getenv.3.html
 // fallback: use standard C `getenv` but this cannot be used while initializing the C runtime
 bool _mi_prim_getenv(const char* name, char* result, size_t result_size) {
   // cannot call getenv() when still initializing the C runtime.
@@ -781,6 +880,9 @@ bool _mi_prim_random_buf(void* buf, size_t buf_len) {
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <errno.h>
+
+// getrandom
+//   https://man7.org/linux/man-pages/man2/getrandom.2.html
 
 bool _mi_prim_random_buf(void* buf, size_t buf_len) {
   // Modern Linux provides `getrandom` but different distributions either use `sys/random.h` or `linux/random.h`
@@ -844,6 +946,8 @@ static void mi_pthread_done(void* value) {
   }
 }
 
+// pthread_key_create
+//   https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_key_create.html
 void _mi_prim_thread_init_auto_done(void) {
   mi_assert_internal(_mi_heap_default_key == (pthread_key_t)(-1));
   pthread_key_create(&_mi_heap_default_key, &mi_pthread_done);
@@ -855,6 +959,8 @@ void _mi_prim_thread_done_auto_done(void) {
   }
 }
 
+// pthread_setspecific
+//   https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_setspecific.html
 void _mi_prim_thread_associate_default_heap(mi_heap_t* heap) {
   if (_mi_heap_default_key != (pthread_key_t)(-1)) {  // can happen during recursive invocation on freeBSD
     pthread_setspecific(_mi_heap_default_key, heap);
