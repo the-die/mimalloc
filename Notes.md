@@ -231,3 +231,7 @@ Random number generator
 You can also directly build the single `src/static.c` file as part of your project without needing `cmake` at all. Make sure to also add the mimalloc `include` directory to the include path.
 
 ### `prim.h` `prim.c` `unix/prim.c`
+
+## TODO
+
+### MI_TLS_RECURSE_GUARD
