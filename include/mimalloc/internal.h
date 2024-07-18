@@ -697,10 +697,15 @@ static inline bool mi_is_in_same_page(const void* p, const void* q) {
   return (start <= (uint8_t*)q && (uint8_t*)q < start + psize);
 }
 
+// rotl
+//   https://en.cppreference.com/w/cpp/numeric/rotl
 static inline uintptr_t mi_rotl(uintptr_t x, uintptr_t shift) {
   shift %= MI_INTPTR_BITS;
   return (shift==0 ? x : ((x << shift) | (x >> (MI_INTPTR_BITS - shift))));
 }
+
+// rotr
+//   https://en.cppreference.com/w/cpp/numeric/rotr
 static inline uintptr_t mi_rotr(uintptr_t x, uintptr_t shift) {
   shift %= MI_INTPTR_BITS;
   return (shift==0 ? x : ((x >> shift) | (x << (MI_INTPTR_BITS - shift))));

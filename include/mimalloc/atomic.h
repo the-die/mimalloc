@@ -74,6 +74,9 @@ terms of the MIT license. A copy of the license can be found in the file
 // What’s up with this new memory_order_consume memory order?
 //   https://devblogs.microsoft.com/oldnewthing/20230427-00/?p=108107
 
+// Understand std::atomic::compare_exchange_weak() in C++11
+//   https://tonywearme.wordpress.com/2014/08/15/understand-stdatomiccompare_exchange_weak-in-c11/
+
 // Various defines for all used memory orders in mimalloc
 #define mi_atomic_cas_weak(p,expected,desired,mem_success,mem_fail)  \
   mi_atomic(compare_exchange_weak_explicit)(p,expected,desired,mem_success,mem_fail)
