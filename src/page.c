@@ -327,7 +327,7 @@ bool _mi_heap_delayed_free_partial(mi_heap_t* heap) {
 
   // and free them all
   while(block != NULL) {
-    mi_block_t* next = mi_block_nextx(heap,block, heap->keys);
+    mi_block_t* next = mi_block_nextx(heap, block, heap->keys);
     // use internal free instead of regular one to keep stats etc correct
     if (!_mi_free_delayed_block(block)) {
       // we might already start delayed freeing while another thread has not yet

@@ -1,0 +1,9 @@
+bin/
+build/
+cmake/
+deploy/
+doc/
+docker/
+docs/
+ide/
+test/

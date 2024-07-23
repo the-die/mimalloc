@@ -533,6 +533,7 @@ typedef struct mi_padding_s {
 #define MI_PADDING_WSIZE  0
 #endif
 
+// MI_SMALL_WSIZE_MAX == 128, MI_SMALL_WSIZE_MAX == 1, `+ 1` for 0 index
 #define MI_PAGES_DIRECT   (MI_SMALL_WSIZE_MAX + MI_PADDING_WSIZE + 1)
 
 

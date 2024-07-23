@@ -590,6 +590,7 @@ static inline void mi_page_set_heap(mi_page_t* page, mi_heap_t* heap) {
 }
 
 // Thread free flag helpers
+// We use the bottom 2 bits of the pointer for mi_delayed_t flags
 static inline mi_block_t* mi_tf_block(mi_thread_free_t tf) {
   return (mi_block_t*)(tf & ~0x03);
 }
@@ -711,16 +712,19 @@ static inline uintptr_t mi_rotr(uintptr_t x, uintptr_t shift) {
   return (shift==0 ? x : ((x >> shift) | (x << (MI_INTPTR_BITS - shift))));
 }
 
+// decode `x` using `null` and `keys`
 static inline void* mi_ptr_decode(const void* null, const mi_encoded_t x, const uintptr_t* keys) {
   void* p = (void*)(mi_rotr(x - keys[0], keys[0]) ^ keys[1]);
-  return (p==null ? NULL : p);
+  return p == null ? NULL : p;
 }
 
+// encode `p` using `null` and 'keys'
 static inline mi_encoded_t mi_ptr_encode(const void* null, const void* p, const uintptr_t* keys) {
-  uintptr_t x = (uintptr_t)(p==NULL ? null : p);
+  uintptr_t x = (uintptr_t)(p == NULL ? null : p);
   return mi_rotl(x ^ keys[1], keys[0]) + keys[0];
 }
 
+// get the next block
 static inline mi_block_t* mi_block_nextx( const void* null, const mi_block_t* block, const uintptr_t* keys ) {
   mi_track_mem_defined(block,sizeof(mi_block_t));
   mi_block_t* next;
