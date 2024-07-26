@@ -94,14 +94,14 @@ static mi_decl_cache_align _Atomic(uintptr_t)aligned_base;
 
 void* _mi_os_get_aligned_hint(size_t try_alignment, size_t size)
 {
-  if (try_alignment <= 1 || try_alignment > MI_SEGMENT_SIZE) return NULL;
-  size = _mi_align_up(size, MI_SEGMENT_SIZE);
+  if (try_alignment <= 1 || try_alignment > MI_SEGMENT_SIZE) return NULL;  // check try_alignment
+  size = _mi_align_up(size, MI_SEGMENT_SIZE);  // align size
   if (size > 1*MI_GiB) return NULL;  // guarantee the chance of fixed valid address is at most 1/(MI_HINT_AREA / 1<<30) = 1/4096.
   #if (MI_SECURE>0)
   size += MI_SEGMENT_SIZE;        // put in `MI_SEGMENT_SIZE` virtual gaps between hinted blocks; this splits VLA's but increases guarded areas.
   #endif
 
-  uintptr_t hint = mi_atomic_add_acq_rel(&aligned_base, size);
+  uintptr_t hint = mi_atomic_add_acq_rel(&aligned_base, size);  // aligned_base += size, and return the previous `aligned_base`
   if (hint == 0 || hint > MI_HINT_MAX) {   // wrap or initialize
     uintptr_t init = MI_HINT_BASE;
     #if (MI_SECURE>0 || MI_DEBUG==0)       // security: randomize start of aligned allocations unless in debug mode
@@ -109,7 +109,7 @@ void* _mi_os_get_aligned_hint(size_t try_alignment, size_t size)
     init = init + ((MI_SEGMENT_SIZE * ((r>>17) & 0xFFFFF)) % MI_HINT_AREA);  // (randomly 20 bits)*4MiB == 0 to 4TiB
     #endif
     uintptr_t expected = hint + size;
-    mi_atomic_cas_strong_acq_rel(&aligned_base, &expected, init);
+    mi_atomic_cas_strong_acq_rel(&aligned_base, &expected, init);  // aligned_base = init
     hint = mi_atomic_add_acq_rel(&aligned_base, size); // this may still give 0 or > MI_HINT_MAX but that is ok, it is a hint after all
   }
   if (hint%try_alignment != 0) return NULL;

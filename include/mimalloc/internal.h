@@ -338,6 +338,9 @@ static inline bool _mi_is_aligned(void* p, size_t alignment) {
 }
 
 // Align upwards
+//
+// Example:
+//   sz = 7, alignment = 8, mask = 7, result = 8
 static inline uintptr_t _mi_align_up(uintptr_t sz, size_t alignment) {
   mi_assert_internal(alignment != 0);
   uintptr_t mask = alignment - 1;
@@ -350,6 +353,9 @@ static inline uintptr_t _mi_align_up(uintptr_t sz, size_t alignment) {
 }
 
 // Align downwards
+//
+// Example:
+//   sz = 7, alignment = 8, mask = 7, result = 0
 static inline uintptr_t _mi_align_down(uintptr_t sz, size_t alignment) {
   mi_assert_internal(alignment != 0);
   uintptr_t mask = alignment - 1;

@@ -233,6 +233,7 @@ static int unix_madvise(void* addr, size_t size, int advice) {
 
 // mmap
 //   https://man7.org/linux/man-pages/man2/mmap.2.html
+//   https://man7.org/linux/man-pages/man3/mmap.3p.html
 static void* unix_mmap_prim(void* addr, size_t size, size_t try_alignment, int protect_flags, int flags, int fd) {
   MI_UNUSED(try_alignment);
   void* p = NULL;
@@ -265,6 +266,16 @@ static void* unix_mmap_prim(void* addr, size_t size, size_t try_alignment, int p
   if (addr == NULL) {
     void* hint = _mi_os_get_aligned_hint(try_alignment, size);
     if (hint != NULL) {
+      // If addr is NULL, then the kernel chooses the (page-aligned)
+      // address at which to create the mapping; this is the most portable
+      // method of creating a new mapping.  If addr is not NULL, then the
+      // kernel takes it as a hint about where to place the mapping; on
+      // Linux, the kernel will pick a nearby page boundary (but always
+      // above or equal to the value specified by
+      // /proc/sys/vm/mmap_min_addr) and attempt to create the mapping
+      // there.  If another mapping already exists there, the kernel picks
+      // a new address that may or may not depend on the hint.  The
+      // address of the new mapping is returned as the result of the call.
       p = mmap(hint, size, protect_flags, flags, fd, 0);
       if (p==MAP_FAILED || !_mi_is_aligned(p,try_alignment)) {
         #if MI_TRACK_ENABLED  // asan sometimes does not instrument errno correctly?
@@ -280,7 +291,19 @@ static void* unix_mmap_prim(void* addr, size_t size, size_t try_alignment, int p
   }
   #endif
   // regular mmap
+  //
+  // The contents of a file mapping (as opposed to an anonymous
+  // mapping; see MAP_ANONYMOUS below), are initialized using length
+  // bytes starting at offset offset in the file (or other object)
+  // referred to by the file descriptor fd.  offset must be a multiple
+  // of the page size as returned by sysconf(_SC_PAGE_SIZE).
+  //
+  // After the mmap() call has returned, the file descriptor, fd, can
+  // be closed immediately without invalidating the mapping.
   p = mmap(addr, size, protect_flags, flags, fd, 0);
+  // On success, mmap() returns a pointer to the mapped area.  On
+  // error, the value MAP_FAILED (that is, (void *) -1) is returned,
+  // and errno is set to indicate the error.
   if (p!=MAP_FAILED) return p;
   // failed to allocate
   return NULL;
@@ -295,13 +318,22 @@ static int unix_mmap_fd(void) {
   if (os_tag < 100 || os_tag > 255) { os_tag = 100; }
   return VM_MAKE_TAG(os_tag);
   #else
-  // see MAP_ANONYMOUS
+  // MAP_ANONYMOUS
+  //
+  // The mapping is not backed by any file; its contents are
+  // initialized to zero.  The fd argument is ignored; however,
+  // some implementations require fd to be -1 if MAP_ANONYMOUS
+  // (or MAP_ANON) is specified, and portable applications
+  // should ensure this.  The offset argument should be zero.
+  // Support for MAP_ANONYMOUS in conjunction with MAP_SHARED
+  // was added in Linux 2.4.
   return -1;
   #endif
 }
 
+// https://www.gnu.org/software/libc/manual/html_node/Memory_002dmapped-I_002fO.html
 static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protect_flags, bool large_only, bool allow_large, bool* is_large) {
-  // MAP_ANONYMOUS
+  // MAP_ANONYMOUS, MAP_ANON
   //   https://man7.org/linux/man-pages/man2/mmap.2.html
   #if !defined(MAP_ANONYMOUS)
   #define MAP_ANONYMOUS  MAP_ANON
@@ -313,12 +345,39 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
   #endif
   void* p = NULL;
   const int fd = unix_mmap_fd();
-  // MAP_PRIVATE
+  // MAP_ANONYMOUS, MAP_PRIVATE
   //   https://man7.org/linux/man-pages/man2/mmap.2.html
+  //
+  // MAP_PRIVATE
+  //
+  // Create a private copy-on-write mapping.  Updates to the
+  // mapping are not visible to other processes mapping the
+  // same file, and are not carried through to the underlying
+  // file.  It is unspecified whether changes made to the file
+  // after the mmap() call are visible in the mapped region.
+  //
+  // MAP_ANONYMOUS
+  //
+  // The mapping is not backed by any file; its contents are
+  // initialized to zero.  The fd argument is ignored; however,
+  // some implementations require fd to be -1 if MAP_ANONYMOUS
+  // (or MAP_ANON) is specified, and portable applications
+  // should ensure this.  The offset argument should be zero.
+  // Support for MAP_ANONYMOUS in conjunction with MAP_SHARED
+  // was added in Linux 2.4.
   int flags = MAP_PRIVATE | MAP_ANONYMOUS;
   if (_mi_os_has_overcommit()) {
     // MAP_NORESERVE
     //   https://man7.org/linux/man-pages/man2/mmap.2.html
+    //
+    //   Do not reserve swap space for this mapping.  When swap
+    //   space is reserved, one has the guarantee that it is
+    //   possible to modify the mapping.  When swap space is not
+    //   reserved one might get SIGSEGV upon a write if no physical
+    //   memory is available.  See also the discussion of the file
+    //   /proc/sys/vm/overcommit_memory in proc(5).  Before Linux
+    //   2.6, this flag had effect only for private writable
+    //   mappings.
     flags |= MAP_NORESERVE;
   }
   // PROT_MAZ
