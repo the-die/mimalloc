@@ -27,6 +27,9 @@ typedef struct mi_os_mem_config_s {
   size_t  alloc_granularity;    // smallest allocation size (usually 4KiB, on Windows 64KiB)
   bool    has_overcommit;       // can we reserve more memory than can be actually committed?
   bool    has_partial_free;     // can allocated blocks be freed partially? (true for mmap, false for VirtualAlloc)
+  // Virtual Address Space Reservation: Virtual address space is the range of addresses that a
+  // process can potentially use. Reservation means setting aside a range of these addresses without
+  // necessarily committing physical memory to them immediately.
   bool    has_virtual_reserve;  // supports virtual address space reservation? (if true we can reserve virtual address space without using commit or physical memory)
 } mi_os_mem_config_t;
 

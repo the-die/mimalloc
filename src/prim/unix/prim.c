@@ -169,8 +169,16 @@ void _mi_prim_mem_init( mi_os_mem_config_t* config )
   }
   config->large_page_size = 2*MI_MiB; // TODO: can we query the OS for this?
   config->has_overcommit = unix_detect_overcommit();
+  // https://man7.org/linux/man-pages/man3/munmap.3p.html
+  // The munmap() function shall remove any mappings for those entire
+  // pages containing any part of the address space of the process
+  // starting at addr and continuing for len bytes.
   config->has_partial_free = true;    // mmap can free in parts
   config->has_virtual_reserve = true; // todo: check if this true for NetBSD?  (for anonymous mmap with PROT_NONE)
+
+  // Transparent Hugepage
+  //   https://docs.kernel.org/admin-guide/mm/transhuge.html
+  //   https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/6/html/performance_tuning_guide/s-memory-transhuge
 
   // disable transparent huge pages for this process?
   #if (defined(__linux__) || defined(__ANDROID__)) && defined(PR_GET_THP_DISABLE)
@@ -181,6 +189,10 @@ void _mi_prim_mem_init( mi_os_mem_config_t* config )
   #endif
   {
     int val = 0;
+    // prctl
+    //   https://man7.org/linux/man-pages/man2/prctl.2.html
+    // PR_GET_THP_DISABLE
+    //   https://man7.org/linux/man-pages/man2/PR_GET_THP_DISABLE.2const.html
     if (prctl(PR_GET_THP_DISABLE, &val, 0, 0, 0) != 0) {
       // Most likely since distros often come with always/madvise settings.
       val = 1;
@@ -197,6 +209,7 @@ void _mi_prim_mem_init( mi_os_mem_config_t* config )
 //---------------------------------------------
 
 // munmap
+//   https://man7.org/linux/man-pages/man2/mmap.2.html
 //   https://man7.org/linux/man-pages/man3/munmap.3p.html
 int _mi_prim_free(void* addr, size_t size ) {
   bool err = (munmap(addr, size) == -1);
