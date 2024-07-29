@@ -223,6 +223,19 @@ int _mi_prim_free(void* addr, size_t size ) {
 
 // madvise
 //   https://man7.org/linux/man-pages/man2/madvise.2.html
+//
+// The madvise() system call is used to give advice or directions to
+// the kernel about the address range beginning at address addr and
+// with size length.  madvise() only operates on whole pages,
+// therefore addr must be page-aligned.  The value of length is
+// rounded up to a multiple of page size.  In most cases, the goal
+// of such advice is to improve system or application performance.
+//
+// Initially, the system call supported a set of "conventional"
+// advice values, which are also available on several other
+// implementations.  (Note, though, that madvise() is not specified
+// in POSIX.)  Subsequently, a number of Linux-specific advice
+// values have been added.
 static int unix_madvise(void* addr, size_t size, int advice) {
   #if defined(__sun)
   return madvise((caddr_t)addr, size, advice);  // Solaris needs cast (issue #520)
@@ -406,11 +419,41 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
       #endif
       // MAP_HUGETLB
       //   https://man7.org/linux/man-pages/man2/mmap.2.html
+      //
+      // MAP_HUGETLB (since Linux 2.6.32)
+      //
+      // Allocate the mapping using "huge" pages.  See the Linux
+      // kernel source file
+      // Documentation/admin-guide/mm/hugetlbpage.rst for further
+      // information, as well as NOTES, below.
       #ifdef MAP_HUGETLB
       lflags |= MAP_HUGETLB;
       #endif
       // MAP_HUGE_1GB
       //   https://man7.org/linux/man-pages/man2/mmap.2.html
+      //
+      // MAP_HUGE_2MB
+      // MAP_HUGE_1GB (since Linux 3.8)
+      //
+      // Used in conjunction with MAP_HUGETLB to select alternative
+      // hugetlb page sizes (respectively, 2 MB and 1 GB) on
+      // systems that support multiple hugetlb page sizes.
+      //
+      // More generally, the desired huge page size can be
+      // configured by encoding the base-2 logarithm of the desired
+      // page size in the six bits at the offset MAP_HUGE_SHIFT.
+      // (A value of zero in this bit field provides the default
+      // huge page size; the default huge page size can be
+      // discovered via the Hugepagesize field exposed by
+      // /proc/meminfo.)  Thus, the above two constants are defined
+      // as:
+      //
+      //     #define MAP_HUGE_2MB    (21 << MAP_HUGE_SHIFT)
+      //     #define MAP_HUGE_1GB    (30 << MAP_HUGE_SHIFT)
+      //
+      // The range of huge page sizes that are supported by the
+      // system can be discovered by listing the subdirectories in
+      // /sys/kernel/mm/hugepages.
       #ifdef MAP_HUGE_1GB
       static bool mi_huge_pages_available = true;
       if ((size % MI_GiB) == 0 && mi_huge_pages_available) {
@@ -458,6 +501,15 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
     if (p != NULL) {
       // MADV_HUGEPAGE
       //   https://man7.org/linux/man-pages/man2/madvise.2.html
+      //
+      // MADV_HUGEPAGE (since Linux 2.6.38)
+      //
+      // Enable Transparent Huge Pages (THP) for pages in the range
+      // specified by addr and length.  The kernel will regularly
+      // scan the areas marked as huge page candidates to replace
+      // them with huge pages.  The kernel will also allocate huge
+      // pages directly when the region is naturally aligned to the
+      // huge page size (see posix_memalign(2)).
       #if defined(MADV_HUGEPAGE)
       // Many Linux systems don't allow MAP_HUGETLB but they support instead
       // transparent huge pages (THP). Generally, it is not required to call `madvise` with MADV_HUGE
@@ -489,9 +541,12 @@ static void* unix_mmap(void* addr, size_t size, size_t try_alignment, int protec
 // Note: the `try_alignment` is just a hint and the returned pointer is not guaranteed to be aligned.
 int _mi_prim_alloc(size_t size, size_t try_alignment, bool commit, bool allow_large, bool* is_large, bool* is_zero, void** addr) {
   mi_assert_internal(size > 0 && (size % _mi_os_page_size()) == 0);
-  mi_assert_internal(commit || !allow_large);
+  mi_assert_internal(commit || !allow_large);  // `commit` is false, `allow_large` must be false
   mi_assert_internal(try_alignment > 0);
 
+  // MAP_ANONYMOUS
+  // The mapping is not backed by any file; its contents are
+  // initialized to zero.
   *is_zero = true;
   int protect_flags = (commit ? (PROT_WRITE | PROT_READ) : PROT_NONE);
   *addr = unix_mmap(NULL, size, try_alignment, protect_flags, false, allow_large, is_large);
@@ -505,6 +560,16 @@ int _mi_prim_alloc(size_t size, size_t try_alignment, bool commit, bool allow_la
 
 static void unix_mprotect_hint(int err) {
   #if defined(__linux__) && (MI_SECURE>=2) // guard page around every mimalloc page
+  // ENOMEM
+  //
+  // Changing the protection of a memory region would result in
+  // the total number of mappings with distinct attributes
+  // (e.g., read versus read/write protection) exceeding the
+  // allowed maximum.  (For example, making the protection of a
+  // range PROT_READ in the middle of a region currently
+  // protected as PROT_READ|PROT_WRITE would result in three
+  // mappings: two read/write mappings at each end and a read-
+  // only mapping in the middle.)
   if (err == ENOMEM) {
     _mi_warning_message("The next warning may be caused by a low memory map limit.\n"
                         "  On Linux this is controlled by the vm.max_map_count -- maybe increase it?\n"
@@ -536,6 +601,51 @@ int _mi_prim_decommit(void* start, size_t size, bool* needs_recommit) {
   int err = 0;
   // MADV_DONTNEED
   //   https://man7.org/linux/man-pages/man2/madvise.2.html
+  //
+  // Do not expect access in the near future.  (For the time
+  // being, the application is finished with the given range,
+  // so the kernel can free resources associated with it.)
+  //
+  // After a successful MADV_DONTNEED operation, the semantics
+  // of memory access in the specified region are changed:
+  // subsequent accesses of pages in the range will succeed,
+  // but will result in either repopulating the memory contents
+  // from the up-to-date contents of the underlying mapped file
+  // (for shared file mappings, shared anonymous mappings, and
+  // shmem-based techniques such as System V shared memory
+  // segments) or zero-fill-on-demand pages for anonymous
+  // private mappings.
+  //
+  // Note that, when applied to shared mappings, MADV_DONTNEED
+  // might not lead to immediate freeing of the pages in the
+  // range.  The kernel is free to delay freeing the pages
+  // until an appropriate moment.  The resident set size (RSS)
+  // of the calling process will be immediately reduced
+  // however.
+  //
+  // MADV_FREE (since Linux 4.5)
+  //
+  // The application no longer requires the pages in the range
+  // specified by addr and len.  The kernel can thus free these
+  // pages, but the freeing could be delayed until memory
+  // pressure occurs.  For each of the pages that has been
+  // marked to be freed but has not yet been freed, the free
+  // operation will be canceled if the caller writes into the
+  // page.  After a successful MADV_FREE operation, any stale
+  // data (i.e., dirty, unwritten pages) will be lost when the
+  // kernel frees the pages.  However, subsequent writes to
+  // pages in the range will succeed and then kernel cannot
+  // free those dirtied pages, so that the caller can always
+  // see just written data.  If there is no subsequent write,
+  // the kernel can free the pages at any time.  Once pages in
+  // the range have been freed, the caller will see zero-fill-
+  // on-demand pages upon subsequent page references.
+  //
+  // The MADV_FREE operation can be applied only to private
+  // anonymous pages (see mmap(2)).  Before Linux 4.12, when
+  // freeing pages on a swapless system, the pages in the given
+  // range are freed instantly, regardless of memory pressure.
+  //
   // decommit: use MADV_DONTNEED as it decreases rss immediately (unlike MADV_FREE)
   err = unix_madvise(start, size, MADV_DONTNEED);
   #if !MI_DEBUG && !MI_SECURE
@@ -568,7 +678,9 @@ int _mi_prim_reset(void* start, size_t size) {
   static _Atomic(size_t) advice = MI_ATOMIC_VAR_INIT(MADV_FREE);
   int oadvice = (int)mi_atomic_load_relaxed(&advice);
   int err;
-  while ((err = unix_madvise(start, size, oadvice)) != 0 && errno == EAGAIN) { errno = 0;  };
+  // EAGAIN
+  // A kernel resource was temporarily unavailable.
+  while ((err = unix_madvise(start, size, oadvice)) != 0 && errno == EAGAIN) { errno = 0; };
   if (err != 0 && errno == EINVAL && oadvice == MADV_FREE) {
     // if MADV_FREE is not supported, fall back to MADV_DONTNEED from now on
     mi_atomic_store_release(&advice, (size_t)MADV_DONTNEED);
@@ -580,6 +692,7 @@ int _mi_prim_reset(void* start, size_t size) {
   return err;
 }
 
+// https://man7.org/linux/man-pages/man2/mprotect.2.html
 int _mi_prim_protect(void* start, size_t size, bool protect) {
   int err = mprotect(start, size, protect ? PROT_NONE : (PROT_READ | PROT_WRITE));
   if (err != 0) { err = errno; }
