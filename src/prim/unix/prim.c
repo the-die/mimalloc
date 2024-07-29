@@ -714,6 +714,11 @@ int _mi_prim_protect(void* start, size_t size, bool protect) {
 
 // mbind
 //   https://man7.org/linux/man-pages/man2/mbind.2.html
+//
+// mbind() sets the NUMA memory policy, which consists of a policy
+// mode and zero or more nodes, for the memory range starting with
+// addr and continuing for len bytes.  The memory policy defines
+// from which node memory is allocated.
 #if defined(MI_HAS_SYSCALL_H) && defined(SYS_mbind)
 static long mi_prim_mbind(void* start, unsigned long len, unsigned long mode, const unsigned long* nmask, unsigned long maxnode, unsigned flags) {
   return syscall(SYS_mbind, start, len, mode, nmask, maxnode, flags);
@@ -731,6 +736,18 @@ int _mi_prim_alloc_huge_os_pages(void* hint_addr, size_t size, int numa_node, bo
   *addr = unix_mmap(hint_addr, size, MI_SEGMENT_SIZE, PROT_READ | PROT_WRITE, true, true, &is_large);
   if (*addr != NULL && numa_node >= 0 && numa_node < 8*MI_INTPTR_SIZE) { // at most 64 nodes
     unsigned long numa_mask = (1UL << numa_node);
+    // MPOL_PREFERRED
+    //   https://man7.org/linux/man-pages/man2/mbind.2.html
+    //
+    // This mode sets the preferred node for allocation.  The
+    // kernel will try to allocate pages from this node first and
+    // fall back to other nodes if the preferred nodes is low on
+    // free memory.  If nodemask specifies more than one node ID,
+    // the first node in the mask will be selected as the
+    // preferred node.  If the nodemask and maxnode arguments
+    // specify the empty set, then the memory is allocated on the
+    // node of the CPU that triggered the allocation.
+    //
     // TODO: does `mbind` work correctly for huge OS pages? should we
     // use `set_mempolicy` before calling mmap instead?
     // see: <https://lkml.org/lkml/2017/2/9/875>
@@ -764,6 +781,16 @@ int _mi_prim_alloc_huge_os_pages(void* hint_addr, size_t size, int numa_node, bo
 //   https://man7.org/linux/man-pages/man7/numa.7.html
 //   https://man7.org/linux/man-pages/man3/numa.3.html
 
+// getcpu
+//   https://man7.org/linux/man-pages/man2/getcpu.2.html
+//
+// The getcpu() system call identifies the processor and node on
+// which the calling thread or process is currently running and
+// writes them into the integers pointed to by the cpu and node
+// arguments.  The processor is a unique small integer identifying a
+// CPU.  The node is a unique small identifier identifying a NUMA
+// node.  When either cpu or node is NULL nothing is written to the
+// respective pointer.
 size_t _mi_prim_numa_node(void) {
   #if defined(MI_HAS_SYSCALL_H) && defined(SYS_getcpu)
     unsigned long node = 0;
@@ -850,8 +877,20 @@ size_t _mi_prim_numa_node_count(void) {
 mi_msecs_t _mi_prim_clock_now(void) {
   struct timespec t;
   #ifdef CLOCK_MONOTONIC
+  // CLOCK_MONOTONIC
+  // A nonsettable system-wide clock that represents monotonic time
+  // since—as described by POSIX—"some unspecified point in the
+  // past".  On Linux, that point corresponds to the number of sec‐
+  // onds that the system has been running since it was booted.
   clock_gettime(CLOCK_MONOTONIC, &t);
   #else
+  // CLOCK_REALTIME
+  // A settable system-wide clock that measures real (i.e., wall-
+  // clock) time.  Setting this clock requires appropriate privi‐
+  // leges.  This clock is affected by discontinuous jumps in the
+  // system time (e.g., if the system administrator manually
+  // changes the clock), and by the incremental adjustments per‐
+  // formed by adjtime(3) and NTP.
   clock_gettime(CLOCK_REALTIME, &t);
   #endif
   return ((mi_msecs_t)t.tv_sec * 1000) + ((mi_msecs_t)t.tv_nsec / 1000000);
@@ -895,6 +934,8 @@ mi_msecs_t _mi_prim_clock_now(void) {
 #include <kernel/OS.h>
 #endif
 
+// timeval
+//   https://man7.org/linux/man-pages/man3/timeval.3type.html
 static mi_msecs_t timeval_secs(const struct timeval* tv) {
   return ((mi_msecs_t)tv->tv_sec * 1000L) + ((mi_msecs_t)tv->tv_usec / 1000L);
 }
@@ -904,7 +945,29 @@ static mi_msecs_t timeval_secs(const struct timeval* tv) {
 
 void _mi_prim_process_info(mi_process_info_t* pinfo)
 {
+  // struct rusage {
+  //     struct timeval ru_utime; /* user CPU time used */
+  //     struct timeval ru_stime; /* system CPU time used */
+  //     long   ru_maxrss;        /* maximum resident set size */
+  //     long   ru_ixrss;         /* integral shared memory size */
+  //     long   ru_idrss;         /* integral unshared data size */
+  //     long   ru_isrss;         /* integral unshared stack size */
+  //     long   ru_minflt;        /* page reclaims (soft page faults) */
+  //     long   ru_majflt;        /* page faults (hard page faults) */
+  //     long   ru_nswap;         /* swaps */
+  //     long   ru_inblock;       /* block input operations */
+  //     long   ru_oublock;       /* block output operations */
+  //     long   ru_msgsnd;        /* IPC messages sent */
+  //     long   ru_msgrcv;        /* IPC messages received */
+  //     long   ru_nsignals;      /* signals received */
+  //     long   ru_nvcsw;         /* voluntary context switches */
+  //     long   ru_nivcsw;        /* involuntary context switches */
+  // };
   struct rusage rusage;
+  // RUSAGE_SELF
+  // Return resource usage statistics for the calling process,
+  // which is the sum of resources used by all threads in the
+  // process.
   getrusage(RUSAGE_SELF, &rusage);
   pinfo->utime = timeval_secs(&rusage.ru_utime);
   pinfo->stime = timeval_secs(&rusage.ru_stime);
@@ -938,6 +1001,11 @@ void _mi_prim_process_info(mi_process_info_t* pinfo)
   }
   #endif
 #else
+  // ru_maxrss (since Linux 2.6.32)
+  // This is the maximum resident set size used (in kilobytes).
+  // For RUSAGE_CHILDREN, this is the resident set size of the
+  // largest child, not the maximum resident set size of the
+  // process tree.
   pinfo->peak_rss = rusage.ru_maxrss * 1024;  // Linux/BSD report in KiB
 #endif
   // use defaults for commit
@@ -1080,16 +1148,50 @@ bool _mi_prim_random_buf(void* buf, size_t buf_len) {
     #endif
     static _Atomic(uintptr_t) no_getrandom; // = 0
     if (mi_atomic_load_acquire(&no_getrandom)==0) {
+      // GRND_NONBLOCK
+      // By default, when reading from the random source,
+      // getrandom() blocks if no random bytes are available, and
+      // when reading from the urandom source, it blocks if the
+      // entropy pool has not yet been initialized.  If the
+      // GRND_NONBLOCK flag is set, then getrandom() does not block
+      // in these cases, but instead immediately returns -1 with
+      // errno set to EAGAIN.
       ssize_t ret = syscall(SYS_getrandom, buf, buf_len, GRND_NONBLOCK);
       if (ret >= 0) return (buf_len == (size_t)ret);
+      // ENOSYS
+      // The glibc wrapper function for getrandom() determined that
+      //the underlying kernel does not implement this system call.
       if (errno != ENOSYS) return false;
       mi_atomic_store_release(&no_getrandom, (uintptr_t)1); // don't call again, and fall back to /dev/urandom
     }
   #endif
   int flags = O_RDONLY;
   #if defined(O_CLOEXEC)
+  // O_CLOEXEC (since Linux 2.6.23)
+  //
+  // Enable the close-on-exec flag for the new file descriptor.
+  // Specifying this flag permits a program to avoid additional
+  // fcntl(2) F_SETFD operations to set the FD_CLOEXEC flag.
+  //
+  // Note that the use of this flag is essential in some
+  // multithreaded programs, because using a separate fcntl(2)
+  // F_SETFD operation to set the FD_CLOEXEC flag does not
+  // suffice to avoid race conditions where one thread opens a
+  // file descriptor and attempts to set its close-on-exec flag
+  // using fcntl(2) at the same time as another thread does a
+  // fork(2) plus execve(2).  Depending on the order of
+  // execution, the race may lead to the file descriptor
+  // returned by open() being unintentionally leaked to the
+  // program executed by the child process created by fork(2).
+  // (This kind of race is in principle possible for any system
+  // call that creates a file descriptor whose close-on-exec
+  // flag should be set, and various other Linux system calls
+  // provide an equivalent of the O_CLOEXEC flag to deal with
+  // this problem.)
   flags |= O_CLOEXEC;
   #endif
+  // /dev/urandom
+  // https://man7.org/linux/man-pages/man4/random.4.html
   int fd = mi_prim_open("/dev/urandom", flags);
   if (fd < 0) return false;
   size_t count = 0;
@@ -1138,6 +1240,8 @@ void _mi_prim_thread_init_auto_done(void) {
   pthread_key_create(&_mi_heap_default_key, &mi_pthread_done);
 }
 
+// pthread_key_delete
+//   https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_key_delete.html
 void _mi_prim_thread_done_auto_done(void) {
   if (_mi_heap_default_key != (pthread_key_t)(-1)) {  // do not leak the key, see issue #809
     pthread_key_delete(_mi_heap_default_key);
