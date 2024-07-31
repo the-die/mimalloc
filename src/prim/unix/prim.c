@@ -1234,6 +1234,7 @@ static void mi_pthread_done(void* value) {
 }
 
 // pthread_key_create
+//   https://man7.org/linux/man-pages/man3/pthread_key_create.3p.html
 //   https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_key_create.html
 void _mi_prim_thread_init_auto_done(void) {
   mi_assert_internal(_mi_heap_default_key == (pthread_key_t)(-1));
@@ -1241,6 +1242,7 @@ void _mi_prim_thread_init_auto_done(void) {
 }
 
 // pthread_key_delete
+//   https://www.man7.org/linux/man-pages/man3/pthread_key_delete.3p.html
 //   https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_key_delete.html
 void _mi_prim_thread_done_auto_done(void) {
   if (_mi_heap_default_key != (pthread_key_t)(-1)) {  // do not leak the key, see issue #809
@@ -1249,6 +1251,7 @@ void _mi_prim_thread_done_auto_done(void) {
 }
 
 // pthread_setspecific
+//   https://man7.org/linux/man-pages/man3/pthread_setspecific.3p.html
 //   https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_setspecific.html
 void _mi_prim_thread_associate_default_heap(mi_heap_t* heap) {
   if (_mi_heap_default_key != (pthread_key_t)(-1)) {  // can happen during recursive invocation on freeBSD

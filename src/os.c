@@ -76,6 +76,9 @@ bool _mi_os_commit(void* addr, size_t size, bool* is_zero, mi_stats_t* tld_stats
   aligned hinting
 -------------------------------------------------------------- */
 
+// Linux x86_64 virtual memory layout
+//   https://www.kernel.org/doc/Documentation/x86/x86_64/mm.txt
+
 // On 64-bit systems, we can do efficient aligned allocation by using
 // the 2TiB to 30TiB area to allocate those.
 #if (MI_INTPTR_SIZE >= 8)
