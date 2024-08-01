@@ -264,7 +264,7 @@ static void* mi_os_prim_alloc_aligned(size_t size, size_t alignment, bool commit
       // and selectively unmap parts around the over-allocated area. 
       void* aligned_p = mi_align_up_ptr(p, alignment);
       size_t pre_size = (uint8_t*)aligned_p - (uint8_t*)p;
-      size_t mid_size = _mi_align_up(size, _mi_os_page_size());
+      size_t mid_size = _mi_align_up(size, _mi_os_page_size());  // need _mi_align_up?
       size_t post_size = over_size - pre_size - mid_size;
       mi_assert_internal(pre_size < over_size&& post_size < over_size&& mid_size >= size);
       if (pre_size > 0)  { mi_os_prim_free(p, pre_size, commit, stats); }
