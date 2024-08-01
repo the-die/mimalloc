@@ -325,6 +325,13 @@ void* _mi_os_alloc_aligned(size_t size, size_t alignment, bool commit, bool allo
   to use the actual start of the memory region.
 ----------------------------------------------------------- */
 
+// |       extra       |
+// v                   v
+// +-------------------+---------+
+// |                   |         |
+// +-------------------+---------+
+//                     ^
+//                   offset
 void* _mi_os_alloc_aligned_at_offset(size_t size, size_t alignment, size_t offset, bool commit, bool allow_large, mi_memid_t* memid, mi_stats_t* stats) {
   mi_assert(offset <= MI_SEGMENT_SIZE);
   mi_assert(offset <= size);
@@ -462,6 +469,18 @@ bool _mi_os_reset(void* addr, size_t size, mi_stats_t* stats) {
 }
 
 
+// The function _mi_os_purge_ex manages the purging of memory, which involves either resetting or
+// decommitting memory. It returns a boolean indicating whether the memory needs to be recommitted
+// for future use.
+//
+// Return Value:
+//
+// True:
+//    Indicates that the memory needs to be recommitted if it is to be used again in the future.
+// False:
+//    Indicates that the memory does not need to be recommitted after the operation (either because
+//    decommitting was successful or resetting was sufficient).
+//
 // either resets or decommits memory, returns true if the memory needs
 // to be recommitted if it is to be re-used later on.
 bool _mi_os_purge_ex(void* p, size_t size, bool allow_reset, mi_stats_t* stats)
@@ -470,6 +489,8 @@ bool _mi_os_purge_ex(void* p, size_t size, bool allow_reset, mi_stats_t* stats)
   _mi_stat_counter_increase(&stats->purge_calls, 1);
   _mi_stat_increase(&stats->purged, size);
 
+  // Checks if mi_option_purge_decommits is enabled (mi_option_is_enabled(mi_option_purge_decommits))
+  // and ensures it's not during preloading (!_mi_preloading()).
   if (mi_option_is_enabled(mi_option_purge_decommits) &&   // should decommit?
       !_mi_preloading())                                   // don't decommit during preloading (unsafe)
   {
@@ -527,12 +548,22 @@ and possibly associated with a specific NUMA node. (use `numa_node>=0`)
 
 
 #if (MI_INTPTR_SIZE >= 8)
+// static mi_decl_cache_align _Atomic(uintptr_t) mi_huge_start;: Declares a static atomic variable
+// mi_huge_start, which stores the starting address of the allocated huge pages. It ensures atomic
+// operations for thread safety (_Atomic) and potentially aligns the variable in the CPU cache
+// (mi_decl_cache_align).
+//
 // To ensure proper alignment, use our own area for huge OS pages
 static mi_decl_cache_align _Atomic(uintptr_t)  mi_huge_start; // = 0
 
+// size_t pages: Specifies the number of pages to allocate.
+// size_t* total_size: Optional output parameter to return the total allocated size.
+//
 // Claim an aligned address range for huge pages
 static uint8_t* mi_os_claim_huge_pages(size_t pages, size_t* total_size) {
   if (total_size != NULL) *total_size = 0;
+  // Calculates the total size in bytes based on the number of pages (pages) and the size of each
+  // page (MI_HUGE_OS_PAGE_SIZE).
   const size_t size = pages * MI_HUGE_OS_PAGE_SIZE;
 
   uintptr_t start = 0;
