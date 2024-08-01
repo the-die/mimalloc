@@ -10,7 +10,7 @@ terms of the MIT license. A copy of the license can be found in the file
 
 #include <string.h>  // memcpy, memset
 #include <stdlib.h>  // atexit
-
+#include <unistd.h>
 
 // see types.h `struct mi_page_s`
 // Empty page used to initialize the small free pages array
@@ -194,8 +194,12 @@ mi_stats_t _mi_stats_main = { MI_STATS_NULL };
 
 
 static void mi_heap_main_init(void) {
+  char dbg_msg[] = "[debug] function(mi_heap_main_init), location(0)\n";
+  write(0, dbg_msg, sizeof(dbg_msg));
   // random cookie to verify pointers (see `_mi_ptr_cookie`)
   if (_mi_heap_main.cookie == 0) {
+    char dbg_msg[] = "[debug] function(mi_heap_main_init), location(1)\n";
+    write(0, dbg_msg, sizeof(dbg_msg));
     _mi_heap_main.thread_id = _mi_thread_id();
     _mi_heap_main.cookie = 1;
     #if defined(_WIN32) && !defined(MI_SHARED_LIB)
@@ -429,6 +433,9 @@ size_t  _mi_current_thread_count(void) {
 // This is called from the `mi_malloc_generic`
 void mi_thread_init(void) mi_attr_noexcept
 {
+  char dbg_msg[] = "[debug] function(mi_thread_init), location(0)\n";
+  write(0, dbg_msg, sizeof(dbg_msg));
+
   // ensure our process has started already
   mi_process_init();
 
@@ -539,6 +546,8 @@ static void mi_allocator_done(void) {
 
 // Called once by the process loader
 static void mi_process_load(void) {
+  char dbg_msg[] = "[debug] function(mi_process_load), location(0)\n";
+  write(0, dbg_msg, sizeof(dbg_msg));
   mi_heap_main_init();
   #if defined(__APPLE__) || defined(MI_TLS_RECURSE_GUARD)
   volatile mi_heap_t* dummy = _mi_heap_default; // access TLS to allocate it before setting tls_initialized to true;
@@ -583,6 +592,9 @@ static void mi_detect_cpu_features(void) {
 
 // Initialize the process; called by thread_init or the process loader
 void mi_process_init(void) mi_attr_noexcept {
+  char dbg_msg[] = "[debug] function(mi_process_init), location(0)\n";
+  write(0, dbg_msg, sizeof(dbg_msg));
+
   // ensure we are called once
   static mi_atomic_once_t process_init;
 	#if _MSC_VER < 1920
@@ -724,6 +736,8 @@ static void mi_cdecl mi_process_done(void) {
   //   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
   // GCC,Clang: use the constructor attribute
   static void __attribute__((constructor)) _mi_process_init(void) {
+    char dbg_msg[] = "[debug] function(_mi_process_init), location(0)\n";
+    write(0, dbg_msg, sizeof(dbg_msg));
     mi_process_load();
   }
 
