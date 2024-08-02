@@ -232,6 +232,41 @@ You can also directly build the single `src/static.c` file as part of your proje
 
 ### `prim.h` `prim.c` `unix/prim.c`
 
+### `init.c`
+
+```
+_mi_process_init
+    mi_process_load
+
+mi_process_load
+    mi_heap_main_init
+    _mi_option_init
+    mi_process_setup_auto_thread_done
+    mi_process_init
+    mi_allocator_init
+    _mi_random_reInit_if_weak
+
+mi_thread_init
+    mi_process_init
+    _mi_thread_heap_init
+
+mi_process_init
+    mi_heap_main_init
+    mi_process_setup_auto_thread_done
+    mi_detect_cpu_features
+    _mi_os_init
+    mi_heap_main_init
+    mi_thread_init
+
+_mi_thread_heap_init
+    mi_heap_main_init
+    _mi_heap_set_default_direct
+    mi_thread_data_zalloc
+    _mi_tld_init
+    _mi_heap_init
+    _mi_heap_set_default_direct
+```
+
 ## TODO
 
 ### MI_TLS_RECURSE_GUARD

@@ -250,6 +250,7 @@ static inline mi_threadid_t _mi_prim_thread_id(void) mi_attr_noexcept {
 #elif MI_USE_BUILTIN_THREAD_POINTER
 
 static inline mi_threadid_t _mi_prim_thread_id(void) mi_attr_noexcept {
+  // https://gcc.gnu.org/git/?p=gcc.git;a=blob_plain;f=gcc/builtins.def
   // Works on most Unix based platforms with recent compilers
   return (uintptr_t)__builtin_thread_pointer();
 }
