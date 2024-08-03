@@ -1056,6 +1056,21 @@ static inline void _mi_memcpy_aligned(void* dst, const void* src, size_t n) {
 
 static inline void _mi_memzero_aligned(void* dst, size_t n) {
   mi_assert_internal((uintptr_t)dst % MI_INTPTR_SIZE == 0);
+  // Built-in Function:
+  //    void * __builtin_assume_aligned (const void *exp, size_t align, ...)
+  //
+  // This function returns its first argument, and allows the compiler to assume that the returned
+  // pointer is at least align bytes aligned. This built-in can have either two or three arguments,
+  // if it has three, the third argument should have integer type, and if it is nonzero means
+  // misalignment offset. For example:
+  //
+  //    void *x = __builtin_assume_aligned (arg, 16);
+  //
+  // means that the compiler can assume x, set to arg, is at least 16-byte aligned, while:
+  //
+  //    void *x = __builtin_assume_aligned (arg, 32, 8);
+  //
+  // means that the compiler can assume for x, set to arg, that (char *) x - 8 is 32-byte aligned.
   void* adst = __builtin_assume_aligned(dst, MI_INTPTR_SIZE);
   _mi_memzero(adst, n);
 }

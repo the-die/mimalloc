@@ -214,6 +214,8 @@ static void mi_heap_main_init(void) {
   }
 }
 
+// 1. init _mi_heap_main
+// 2. return _mi_heap_main
 mi_heap_t* _mi_heap_main_get(void) {
   mi_heap_main_init();
   return &_mi_heap_main;
@@ -294,6 +296,7 @@ static void mi_thread_data_free( mi_thread_data_t* tdfree ) {
   _mi_os_free(tdfree, sizeof(mi_thread_data_t), tdfree->memid, &_mi_stats_main);
 }
 
+// free all thread metadata from the cache
 void _mi_thread_data_collect(void) {
   // free all thread metadata from the cache
   for (int i = 0; i < TD_CACHE_SIZE; i++) {
