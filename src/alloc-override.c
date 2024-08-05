@@ -32,7 +32,32 @@ typedef void* mi_nothrow_t;
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__) && !MI_TRACK_ENABLED
   // gcc, clang: use aliasing to alias the exported function to one of our `mi_` functions
   #if (defined(__GNUC__) && __GNUC__ >= 9)
+    // https://gcc.gnu.org/onlinedocs/gcc/Diagnostic-Pragmas.html
     #pragma GCC diagnostic ignored "-Wattributes"  // or we get warnings that nodiscard is ignored on a forward
+    // https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html
+    // alias ("target")
+    //    The alias variable attribute causes the declaration to be emitted as an alias for another
+    //    symbol known as an alias target. Except for top-level qualifiers the alias target must
+    //    have the same type as the alias.
+    //
+    // used
+    //   This attribute, attached to a variable with static storage, means that the variable must be
+    //   emitted even if it appears that the variable is not referenced.
+    //
+    //   When applied to a static data member of a C++ class template, the attribute also means that
+    //   the member is instantiated if the class itself is instantiated.
+    //
+    // copy
+    // copy (variable)
+    //    The copy attribute applies the set of attributes with which variable has been declared to
+    //    the declaration of the variable to which the attribute is applied. The attribute is
+    //    designed for libraries that define aliases that are expected to specify the same set of
+    //    attributes as the aliased symbols. The copy attribute can be used with variables,
+    //    functions or types. However, the kind of symbol to which the attribute is applied (either
+    //    varible or function) must match the kind of symbol to which the argument refers. The copy
+    //    attribute copies only syntactic and semantic attributes but not attributes that affect a
+    //    symbol’s linkage or visibility such as alias, visibility, or weak. The deprecated
+    //    attribute is also not copied.
     #define MI_FORWARD(fun)      __attribute__((alias(#fun), used, visibility("default"), copy(fun)));
   #else
     #define MI_FORWARD(fun)      __attribute__((alias(#fun), used, visibility("default")));
@@ -146,6 +171,15 @@ typedef void* mi_nothrow_t;
 #endif
 
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+// https://gcc.gnu.org/onlinedocs/gcc/Visibility-Pragmas.html
+// #pragma GCC visibility push(visibility) ¶
+// #pragma GCC visibility pop
+//    This pragma allows the user to set the visibility for multiple declarations without having to
+//    give each a visibility attribute (see Declaring Attributes of Functions).
+//
+//    In C++, ‘#pragma GCC visibility’ affects only namespace-scope declarations. Class members and
+//    template specializations are not affected; if you want to override the visibility for a
+//    particular member or instantiation, you must use an attribute.
 #pragma GCC visibility push(default)
 #endif
 
@@ -177,6 +211,7 @@ typedef void* mi_nothrow_t;
     #endif
   #endif
 
+  // https://en.cppreference.com/w/cpp/feature_test
   #if (__cplusplus > 201402L && defined(__cpp_aligned_new)) && (!defined(__GNUC__) || (__GNUC__ > 5))
   void operator delete  (void* p, std::align_val_t al) noexcept { mi_free_aligned(p, static_cast<size_t>(al)); }
   void operator delete[](void* p, std::align_val_t al) noexcept { mi_free_aligned(p, static_cast<size_t>(al)); }
