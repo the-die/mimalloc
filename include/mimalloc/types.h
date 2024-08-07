@@ -527,6 +527,7 @@ typedef struct mi_padding_s {
   uint32_t delta;  // padding bytes before the block. (mi_usable_size(p) - delta == exact allocated bytes)
 } mi_padding_t;
 #define MI_PADDING_SIZE   (sizeof(mi_padding_t))
+// WSIZE == word size
 #define MI_PADDING_WSIZE  ((MI_PADDING_SIZE + MI_INTPTR_SIZE - 1) / MI_INTPTR_SIZE)
 #else
 #define MI_PADDING_SIZE   0

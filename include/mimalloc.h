@@ -162,6 +162,7 @@ mi_decl_nodiscard mi_decl_export mi_decl_restrict char* mi_realpath(const char* 
 // ------------------------------------------------------
 // Extended functionality
 // ------------------------------------------------------
+// WSIZE == word size
 #define MI_SMALL_WSIZE_MAX  (128)
 // 128 * 8 == 1024
 #define MI_SMALL_SIZE_MAX   (MI_SMALL_WSIZE_MAX*sizeof(void*))
