@@ -403,6 +403,7 @@ static inline size_t _mi_wsize_from_size(size_t size) {
   return (size + sizeof(uintptr_t) - 1) / sizeof(uintptr_t);
 }
 
+// https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html
 // Overflow detecting multiply
 #if __has_builtin(__builtin_umul_overflow) || (defined(__GNUC__) && (__GNUC__ >= 5))
 #include <limits.h>      // UINT_MAX, ULONG_MAX
