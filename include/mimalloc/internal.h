@@ -717,8 +717,11 @@ static inline bool mi_is_in_same_segment(const void* p, const void* q) {
 
 static inline bool mi_is_in_same_page(const void* p, const void* q) {
   mi_segment_t* segment = _mi_ptr_segment(p);
+  // Verifies if both pointers belong to the same memory segment. If not, they cannot be in the same
+  // page.
   if (_mi_ptr_segment(q) != segment) return false;
   // assume q may be invalid // return (_mi_segment_page_of(segment, p) == _mi_segment_page_of(segment, q));
+  // Calculates the page containing pointer p.
   mi_page_t* page = _mi_segment_page_of(segment, p);
   size_t psize;
   uint8_t* start = _mi_segment_page_start(segment, page, &psize);

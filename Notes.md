@@ -270,3 +270,8 @@ _mi_thread_heap_init
 ## TODO
 
 ### MI_TLS_RECURSE_GUARD
+
+### mi_process_init
+
+1. mi_option_reserve_huge_os_pages
+1. mi_option_reserve_os_memory

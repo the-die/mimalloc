@@ -312,6 +312,10 @@ static size_t mi_segment_info_size(mi_segment_t* segment) {
   return segment->segment_info_slices * MI_SEGMENT_SLICE_SIZE;
 }
 
+// segment: A pointer to the memory segment.
+// slice: A pointer to the slice within the segment.
+// block_size: The size of the blocks to be allocated within the page.
+// page_size: An optional output parameter to store the calculated page size.
 static uint8_t* _mi_segment_page_start_from_slice(const mi_segment_t* segment, const mi_slice_t* slice, size_t block_size, size_t* page_size)
 {
   const ptrdiff_t idx = slice - segment->slices;
@@ -321,6 +325,10 @@ static uint8_t* _mi_segment_page_start_from_slice(const mi_segment_t* segment, c
   // note: the offset must always be a block_size multiple since we assume small allocations
   // are aligned (see `mi_heap_malloc_aligned`).
   size_t start_offset = 0;
+  // For small block sizes (less than or equal to MI_MAX_ALIGN_GUARANTEE):
+  // Calculates the adjustment needed to align the base address with the block size.
+  // If the adjustment is smaller than the block size and the total slice size is large enough to
+  // accommodate the adjustment, the start_offset is increased by the adjustment.
   if (block_size > 0 && block_size <= MI_MAX_ALIGN_GUARANTEE) {
     // for small objects, ensure the page start is aligned with the block size (PR#66 by kickunderscore)
     const size_t adjust = block_size - ((uintptr_t)pstart % block_size);
@@ -328,11 +336,14 @@ static uint8_t* _mi_segment_page_start_from_slice(const mi_segment_t* segment, c
       start_offset += adjust;
     }
   }
+  // ???
   if (block_size >= MI_INTPTR_SIZE) {
     if (block_size <= 64) { start_offset += 3*block_size; }
     else if (block_size <= 512) { start_offset += block_size; }
   }
   if (page_size != NULL) { *page_size = psize - start_offset; }
+  // Returns the calculated start address of the page, which is the base address plus the start
+  // offset.
   return (pstart + start_offset);
 }
 

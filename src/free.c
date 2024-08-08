@@ -350,6 +350,9 @@ void mi_free_aligned(void* p, size_t alignment) mi_attr_noexcept {
 // ------------------------------------------------------
 
 #if (MI_ENCODE_FREELIST && (MI_SECURE>=4 || MI_DEBUG!=0))
+// The mi_list_contains function performs a linear search to determine if a specific element exists
+// within a linked list.
+//
 // linear check if the free list contains a specific element
 static bool mi_list_contains(const mi_page_t* page, const mi_block_t* list, const mi_block_t* elem) {
   while (list != NULL) {
@@ -359,6 +362,11 @@ static bool mi_list_contains(const mi_page_t* page, const mi_block_t* list, cons
   return false;
 }
 
+// Checks for double free: It iterates through multiple free lists (page-level, local thread-level,
+//    and thread-level) to determine if the given block is already marked as free.
+// Error reporting: If the block is found in any of the free lists, it indicates a double-free
+//    condition and an error message is logged.
+// Returns a boolean: The function returns true if a double-free is detected, otherwise false.
 static mi_decl_noinline bool mi_check_is_double_freex(const mi_page_t* page, const mi_block_t* block) {
   // The decoded value is in the same page (or NULL).
   // Walk the free lists to verify positively if it is already freed
