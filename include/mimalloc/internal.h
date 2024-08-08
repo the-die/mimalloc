@@ -522,6 +522,26 @@ static inline mi_slice_t* mi_slice_first(const mi_slice_t* slice) {
   return start;
 }
 
+// +===========+ <------+
+// |   memid   |        |
+// |     .     |        |
+// |     .     |        |
+// |     .     |        |
+// | thread_id |        |
+// +-----------+        +----> mi_segment_t
+// | slices[0] |        |
+// |     .     |        |
+// |     .     |        |
+// |     .     |        |
+// | slices[N] |        |
+// +===========+ <------+
+// |           | slices[0] <----+
+// |           |     .          |
+// |  area[0]  |     .          +--> pages[0]
+// |           |     .          |
+// |           | slices[n] <----+
+// +-----------+
+
 // Get the page containing the pointer (performance critical as it is called in mi_free)
 static inline mi_page_t* _mi_segment_page_of(const mi_segment_t* segment, const void* p) {
   mi_assert_internal(p > (void*)segment);
