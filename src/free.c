@@ -465,7 +465,16 @@ void _mi_padding_shrink(const mi_page_t* page, const mi_block_t* block, const si
 
 #if MI_PADDING && MI_PADDING_CHECK
 
+// page: A pointer to a page structure.
+// block: A pointer to a block structure within the page.
+// size: A pointer to a size_t variable that will hold the calculated size of the data without
+//    padding.
+// wrong: A pointer to a size_t variable that will hold the offset of the first incorrect padding
+//    byte, if any.
 static bool mi_verify_padding(const mi_page_t* page, const mi_block_t* block, size_t* size, size_t* wrong) {
+  // bsize: Holds the calculated block size.
+  // delta: Holds the padding size.
+  // ok: A boolean flag to indicate overall verification status.
   size_t bsize;
   size_t delta;
   bool ok = mi_page_decode_padding(page, block, &delta, &bsize);
