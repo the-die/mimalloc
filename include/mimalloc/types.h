@@ -30,6 +30,8 @@ terms of the MIT license. A copy of the license can be found in the file
 #pragma warning(disable:4214) // bitfield is not int
 #endif
 
+// https://en.cppreference.com/w/cpp/types/max_align_t
+
 // Minimal alignment necessary. On most platforms 16 bytes are needed
 // due to SSE registers for example. This must be at least `sizeof(void*)`
 #ifndef MI_MAX_ALIGN_SIZE
@@ -115,6 +117,14 @@ terms of the MIT license. A copy of the license can be found in the file
 //  i == (intptr_t)((void*)i)
 // or otherwise one might define an intptr_t type that is larger than a pointer...
 // ------------------------------------------------------
+
+// INTPTR_MAX, INT64_MAX, INT32_MAX, UINT64_MAX, UINT32_MAX
+//   https://en.cppreference.com/w/c/types/integer
+//   https://en.cppreference.com/w/cpp/types/integer
+
+// SIZE_MAX, LONG_MAX
+//   https://en.cppreference.com/w/c/types/limits
+//   https://en.cppreference.com/w/cpp/types/climits
 
 #if INTPTR_MAX > INT64_MAX
 # define MI_INTPTR_SHIFT (4)  // assume 128-bit  (as on arm CHERI for example)
@@ -500,6 +510,7 @@ typedef struct mi_page_queue_s {
 
 #define MI_BIN_FULL  (MI_BIN_HUGE+1)
 
+// random.c
 // Random context
 typedef struct mi_random_cxt_s {
   uint32_t input[16];
@@ -516,12 +527,14 @@ typedef struct mi_padding_s {
   uint32_t delta;  // padding bytes before the block. (mi_usable_size(p) - delta == exact allocated bytes)
 } mi_padding_t;
 #define MI_PADDING_SIZE   (sizeof(mi_padding_t))
+// WSIZE == word size
 #define MI_PADDING_WSIZE  ((MI_PADDING_SIZE + MI_INTPTR_SIZE - 1) / MI_INTPTR_SIZE)
 #else
 #define MI_PADDING_SIZE   0
 #define MI_PADDING_WSIZE  0
 #endif
 
+// MI_SMALL_WSIZE_MAX == 128, MI_SMALL_WSIZE_MAX == 1, `+ 1` for 0 index
 #define MI_PAGES_DIRECT   (MI_SMALL_WSIZE_MAX + MI_PADDING_WSIZE + 1)
 
 
@@ -560,6 +573,7 @@ struct mi_heap_s {
 #define MI_DEBUG_PADDING    (0xDE)
 #endif
 
+// mi_assert
 #if (MI_DEBUG)
 // use our own assertion to print without memory allocation
 void _mi_assert_fail(const char* assertion, const char* fname, unsigned int line, const char* func );
@@ -568,12 +582,14 @@ void _mi_assert_fail(const char* assertion, const char* fname, unsigned int line
 #define mi_assert(x)
 #endif
 
+// mi_assert_internal
 #if (MI_DEBUG>1)
 #define mi_assert_internal    mi_assert
 #else
 #define mi_assert_internal(x)
 #endif
 
+// mi_assert_expensive
 #if (MI_DEBUG>2)
 #define mi_assert_expensive   mi_assert
 #else

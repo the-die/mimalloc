@@ -24,7 +24,13 @@ static bool mi_is_in_main(void* stat) {
          && (uint8_t*)stat < ((uint8_t*)&_mi_stats_main + sizeof(mi_stats_t)));
 }
 
+// stat: A pointer to a structure of type mi_stat_count_t which holds the statistics.
+// amount: The amount by which to update the statistics.
 static void mi_stat_update(mi_stat_count_t* stat, int64_t amount) {
+  // current: The current value of the resource.
+  // peak: The peak value ever recorded for the resource.
+  // allocated: The total amount of the resource allocated.
+  // freed: The total amount of the resource freed.
   if (amount == 0) return;
   if (mi_is_in_main(stat))
   {

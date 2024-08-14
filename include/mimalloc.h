@@ -14,10 +14,26 @@ terms of the MIT license. A copy of the license can be found in the file
 // Compiler specific attributes
 // ------------------------------------------------------
 
+// cdecl
+//   https://gcc.gnu.org/onlinedocs/gcc/x86-Function-Attributes.html
+
+// __cplusplus
+//   https://gcc.gnu.org/onlinedocs/cpp/Standard-Predefined-Macros.html
+// _MSC_VER
+//   https://learn.microsoft.com/en-us/cpp/preprocessor/predefined-macros?view=msvc-170
+// __GNUC__
+//   https://gcc.gnu.org/onlinedocs/cpp/Common-Predefined-Macros.html
+// __clang__, __clang_major__, __clang_minor__
+//   https://clang.llvm.org/docs/LanguageExtensions.html
+
 #ifdef __cplusplus
   #if (__cplusplus >= 201103L) || (_MSC_VER > 1900)  // C++11
+    // noexcept
+    //   https://en.cppreference.com/w/cpp/language/noexcept
     #define mi_attr_noexcept   noexcept
   #else
+    // throw()
+    //   https://en.cppreference.com/w/cpp/language/noexcept_spec
     #define mi_attr_noexcept   throw()
   #endif
 #else
@@ -25,12 +41,18 @@ terms of the MIT license. A copy of the license can be found in the file
 #endif
 
 #if defined(__cplusplus) && (__cplusplus >= 201703)
+  // nodiscard
+  //   https://en.cppreference.com/w/cpp/language/attributes/nodiscard
   #define mi_decl_nodiscard    [[nodiscard]]
 #elif (defined(__GNUC__) && (__GNUC__ >= 4)) || defined(__clang__)  // includes clang, icc, and clang-cl
+  // warn_unused_result
+  //   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
   #define mi_decl_nodiscard    __attribute__((warn_unused_result))
 #elif defined(_HAS_NODISCARD)
   #define mi_decl_nodiscard    _NODISCARD
 #elif (_MSC_VER >= 1700)
+  // _Check_return_
+  //   https://learn.microsoft.com/en-us/cpp/code-quality/annotating-function-behavior?view=msvc-170
   #define mi_decl_nodiscard    _Check_return_
 #else
   #define mi_decl_nodiscard
@@ -40,8 +62,12 @@ terms of the MIT license. A copy of the license can be found in the file
   #if !defined(MI_SHARED_LIB)
     #define mi_decl_export
   #elif defined(MI_SHARED_LIB_EXPORT)
+    // __declspec(dllexport)
+    //   https://learn.microsoft.com/en-us/cpp/cpp/dllexport-dllimport?view=msvc-170
     #define mi_decl_export              __declspec(dllexport)
   #else
+    // __declspec(dllimport)
+    //   https://learn.microsoft.com/en-us/cpp/cpp/dllexport-dllimport?view=msvc-170
     #define mi_decl_export              __declspec(dllimport)
   #endif
   #if defined(__MINGW32__)
@@ -49,8 +75,12 @@ terms of the MIT license. A copy of the license can be found in the file
     #define mi_attr_malloc              __attribute__((malloc))
   #else
     #if (_MSC_VER >= 1900) && !defined(__EDG__)
+      // __declspec(allocator)
+      //   https://learn.microsoft.com/en-us/cpp/cpp/allocator?view=msvc-170
       #define mi_decl_restrict          __declspec(allocator) __declspec(restrict)
     #else
+      // __declspec(restrict)
+      //   https://learn.microsoft.com/en-us/cpp/cpp/restrict?view=msvc-170
       #define mi_decl_restrict          __declspec(restrict)
     #endif
     #define mi_attr_malloc
@@ -61,12 +91,16 @@ terms of the MIT license. A copy of the license can be found in the file
   #define mi_attr_alloc_align(p)
 #elif defined(__GNUC__)                 // includes clang and icc
   #if defined(MI_SHARED_LIB) && defined(MI_SHARED_LIB_EXPORT)
+    // visibility
+    //   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
     #define mi_decl_export              __attribute__((visibility("default")))
   #else
     #define mi_decl_export
   #endif
   #define mi_cdecl                      // leads to warnings... __attribute__((cdecl))
   #define mi_decl_restrict
+  // malloc
+  //   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
   #define mi_attr_malloc                __attribute__((malloc))
   #if (defined(__clang_major__) && (__clang_major__ < 4)) || (__GNUC__ < 5)
     #define mi_attr_alloc_size(s)
@@ -77,6 +111,8 @@ terms of the MIT license. A copy of the license can be found in the file
     #define mi_attr_alloc_size2(s1,s2)  __attribute__((alloc_size(s1,s2)))
     #define mi_attr_alloc_align(p)
   #else
+    // alloc_size, alloc_align
+    //   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
     #define mi_attr_alloc_size(s)       __attribute__((alloc_size(s)))
     #define mi_attr_alloc_size2(s1,s2)  __attribute__((alloc_size(s1,s2)))
     #define mi_attr_alloc_align(p)      __attribute__((alloc_align(p)))
@@ -107,11 +143,17 @@ extern "C" {
 // Standard malloc interface
 // ------------------------------------------------------
 
+// malloc, calloc, realloc
+//   https://man7.org/linux/man-pages/man3/malloc.3.html
+// _expand
+//   https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/expand?view=msvc-170
 mi_decl_nodiscard mi_decl_export mi_decl_restrict void* mi_malloc(size_t size)  mi_attr_noexcept mi_attr_malloc mi_attr_alloc_size(1);
 mi_decl_nodiscard mi_decl_export mi_decl_restrict void* mi_calloc(size_t count, size_t size)  mi_attr_noexcept mi_attr_malloc mi_attr_alloc_size2(1,2);
 mi_decl_nodiscard mi_decl_export void* mi_realloc(void* p, size_t newsize)      mi_attr_noexcept mi_attr_alloc_size(2);
 mi_decl_export void* mi_expand(void* p, size_t newsize)                         mi_attr_noexcept mi_attr_alloc_size(2);
 
+// free
+//   https://man7.org/linux/man-pages/man3/free.3.html
 mi_decl_export void mi_free(void* p) mi_attr_noexcept;
 mi_decl_nodiscard mi_decl_export mi_decl_restrict char* mi_strdup(const char* s) mi_attr_noexcept mi_attr_malloc;
 mi_decl_nodiscard mi_decl_export mi_decl_restrict char* mi_strndup(const char* s, size_t n) mi_attr_noexcept mi_attr_malloc;
@@ -120,7 +162,9 @@ mi_decl_nodiscard mi_decl_export mi_decl_restrict char* mi_realpath(const char* 
 // ------------------------------------------------------
 // Extended functionality
 // ------------------------------------------------------
+// WSIZE == word size
 #define MI_SMALL_WSIZE_MAX  (128)
+// 128 * 8 == 1024
 #define MI_SMALL_SIZE_MAX   (MI_SMALL_WSIZE_MAX*sizeof(void*))
 
 mi_decl_nodiscard mi_decl_export mi_decl_restrict void* mi_malloc_small(size_t size) mi_attr_noexcept mi_attr_malloc mi_attr_alloc_size(1);
@@ -195,6 +239,7 @@ mi_decl_export mi_heap_t* mi_heap_get_default(void);
 mi_decl_export mi_heap_t* mi_heap_get_backing(void);
 mi_decl_export void       mi_heap_collect(mi_heap_t* heap, bool force) mi_attr_noexcept;
 
+// alloc from heap
 mi_decl_nodiscard mi_decl_export mi_decl_restrict void* mi_heap_malloc(mi_heap_t* heap, size_t size) mi_attr_noexcept mi_attr_malloc mi_attr_alloc_size(2);
 mi_decl_nodiscard mi_decl_export mi_decl_restrict void* mi_heap_zalloc(mi_heap_t* heap, size_t size) mi_attr_noexcept mi_attr_malloc mi_attr_alloc_size(2);
 mi_decl_nodiscard mi_decl_export mi_decl_restrict void* mi_heap_calloc(mi_heap_t* heap, size_t count, size_t size) mi_attr_noexcept mi_attr_malloc mi_attr_alloc_size2(2, 3);
@@ -297,6 +342,7 @@ mi_decl_export int  mi_reserve_huge_os_pages(size_t pages, double max_secs, size
 // Convenience
 // ------------------------------------------------------
 
+// tp == type
 #define mi_malloc_tp(tp)                ((tp*)mi_malloc(sizeof(tp)))
 #define mi_zalloc_tp(tp)                ((tp*)mi_zalloc(sizeof(tp)))
 #define mi_calloc_tp(tp,n)              ((tp*)mi_calloc(n,sizeof(tp)))
@@ -310,6 +356,7 @@ mi_decl_export int  mi_reserve_huge_os_pages(size_t pages, double max_secs, size
 #define mi_heap_mallocn_tp(hp,tp,n)     ((tp*)mi_heap_mallocn(hp,n,sizeof(tp)))
 #define mi_heap_reallocn_tp(hp,p,tp,n)  ((tp*)mi_heap_reallocn(hp,p,n,sizeof(tp)))
 #define mi_heap_recalloc_tp(hp,p,tp,n)  ((tp*)mi_heap_recalloc(hp,p,n,sizeof(tp)))
+// !tp == type
 
 
 // ------------------------------------------------------

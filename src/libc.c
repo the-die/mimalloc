@@ -16,11 +16,15 @@ terms of the MIT license. A copy of the license can be found in the file
 #include "mimalloc/internal.h"
 #include "mimalloc/prim.h"      // mi_prim_getenv
 
+// toupper
+//   https://man7.org/linux/man-pages/man3/toupper.3.html
 char _mi_toupper(char c) {
   if (c >= 'a' && c <= 'z') return (c - 'a' + 'A');
                        else return c;
 }
 
+// strncasecmp
+//   https://man7.org/linux/man-pages/man3/strcasecmp.3.html
 int _mi_strnicmp(const char* s, const char* t, size_t n) {
   if (n == 0) return 0;
   for (; *s != 0 && *t != 0 && n > 0; s++, t++, n--) {
@@ -29,6 +33,8 @@ int _mi_strnicmp(const char* s, const char* t, size_t n) {
   return (n == 0 ? 0 : *s - *t);
 }
 
+// strlcpy
+//   https://man7.org/linux/man-pages/man7/string_copying.7.html
 void _mi_strlcpy(char* dest, const char* src, size_t dest_size) {
   if (dest==NULL || src==NULL || dest_size == 0) return;
   // copy until end of src, or when dest is (almost) full
@@ -40,6 +46,8 @@ void _mi_strlcpy(char* dest, const char* src, size_t dest_size) {
   *dest = 0;
 }
 
+// strlcat
+//   https://man7.org/linux/man-pages/man7/string_copying.7.html
 void _mi_strlcat(char* dest, const char* src, size_t dest_size) {
   if (dest==NULL || src==NULL || dest_size == 0) return;
   // find end of string in the dest buffer
@@ -51,6 +59,8 @@ void _mi_strlcat(char* dest, const char* src, size_t dest_size) {
   _mi_strlcpy(dest, src, dest_size);
 }
 
+// strlen
+//   https://www.man7.org/linux/man-pages/man3/strlen.3.html
 size_t _mi_strlen(const char* s) {
   if (s==NULL) return 0;
   size_t len = 0;
@@ -58,6 +68,8 @@ size_t _mi_strlen(const char* s) {
   return len;
 }
 
+// strnlen
+//   https://man7.org/linux/man-pages/man3/strnlen.3.html
 size_t _mi_strnlen(const char* s, size_t max_len) {
   if (s==NULL) return 0;
   size_t len = 0;
@@ -73,6 +85,8 @@ bool _mi_getenv(const char* name, char* result, size_t result_size) {
   return false;
 }
 #else
+// getenv
+//   https://man7.org/linux/man-pages/man3/getenv.3.html
 bool _mi_getenv(const char* name, char* result, size_t result_size) {
   if (name==NULL || result == NULL || result_size < 64) return false;
   return _mi_prim_getenv(name,result,result_size);

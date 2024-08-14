@@ -350,6 +350,9 @@ void mi_free_aligned(void* p, size_t alignment) mi_attr_noexcept {
 // ------------------------------------------------------
 
 #if (MI_ENCODE_FREELIST && (MI_SECURE>=4 || MI_DEBUG!=0))
+// The mi_list_contains function performs a linear search to determine if a specific element exists
+// within a linked list.
+//
 // linear check if the free list contains a specific element
 static bool mi_list_contains(const mi_page_t* page, const mi_block_t* list, const mi_block_t* elem) {
   while (list != NULL) {
@@ -359,6 +362,11 @@ static bool mi_list_contains(const mi_page_t* page, const mi_block_t* list, cons
   return false;
 }
 
+// Checks for double free: It iterates through multiple free lists (page-level, local thread-level,
+//    and thread-level) to determine if the given block is already marked as free.
+// Error reporting: If the block is found in any of the free lists, it indicates a double-free
+//    condition and an error message is logged.
+// Returns a boolean: The function returns true if a double-free is detected, otherwise false.
 static mi_decl_noinline bool mi_check_is_double_freex(const mi_page_t* page, const mi_block_t* block) {
   // The decoded value is in the same page (or NULL).
   // Walk the free lists to verify positively if it is already freed
@@ -457,7 +465,16 @@ void _mi_padding_shrink(const mi_page_t* page, const mi_block_t* block, const si
 
 #if MI_PADDING && MI_PADDING_CHECK
 
+// page: A pointer to a page structure.
+// block: A pointer to a block structure within the page.
+// size: A pointer to a size_t variable that will hold the calculated size of the data without
+//    padding.
+// wrong: A pointer to a size_t variable that will hold the offset of the first incorrect padding
+//    byte, if any.
 static bool mi_verify_padding(const mi_page_t* page, const mi_block_t* block, size_t* size, size_t* wrong) {
+  // bsize: Holds the calculated block size.
+  // delta: Holds the padding size.
+  // ok: A boolean flag to indicate overall verification status.
   size_t bsize;
   size_t delta;
   bool ok = mi_page_decode_padding(page, block, &delta, &bsize);

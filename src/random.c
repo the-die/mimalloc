@@ -9,6 +9,8 @@ terms of the MIT license. A copy of the license can be found in the file
 #include "mimalloc/prim.h"    // _mi_prim_random_buf
 #include <string.h>       // memset
 
+// pseudorandom number generator (PRNG)
+//   https://en.wikipedia.org/wiki/Cryptographically_secure_pseudorandom_number_generator
 /* ----------------------------------------------------------------------------
 We use our own PRNG to keep predictable performance of random number generation
 and to avoid implementations that use a lock. We only use the OS provided
@@ -33,6 +35,9 @@ The implementation uses regular C code which compiles very well on modern compil
 (gcc x64 has no register spills, and clang 6+ uses SSE instructions)
 -----------------------------------------------------------------------------*/
 
+// https://en.cppreference.com/w/cpp/language/operator_arithmetic
+// https://en.cppreference.com/w/c/language/operator_arithmetic
+// shift is 0 or 32?
 static inline uint32_t rotl(uint32_t x, uint32_t shift) {
   return (x << shift) | (x >> (32 - shift));
 }
@@ -78,6 +83,7 @@ static void chacha_block(mi_random_ctx_t* ctx)
   }
 }
 
+// get random number if available
 static uint32_t chacha_next32(mi_random_ctx_t* ctx) {
   if (ctx->output_available <= 0) {
     chacha_block(ctx);
@@ -89,6 +95,7 @@ static uint32_t chacha_next32(mi_random_ctx_t* ctx) {
   return x;
 }
 
+// little-endian
 static inline uint32_t read32(const uint8_t* p, size_t idx32) {
   const size_t i = 4*idx32;
   return ((uint32_t)p[i+0] | (uint32_t)p[i+1] << 8 | (uint32_t)p[i+2] << 16 | (uint32_t)p[i+3] << 24);
@@ -113,6 +120,7 @@ static void chacha_init(mi_random_ctx_t* ctx, const uint8_t key[32], uint64_t no
   ctx->input[15] = (uint32_t)(nonce >> 32);
 }
 
+// initilize `ctx_new`
 static void chacha_split(mi_random_ctx_t* ctx, uint64_t nonce, mi_random_ctx_t* ctx_new) {
   memset(ctx_new, 0, sizeof(*ctx_new));
   _mi_memcpy(ctx_new->input, ctx->input, sizeof(ctx_new->input));
@@ -158,6 +166,7 @@ To initialize a fresh random context.
 If we cannot get good randomness, we fall back to weak randomness based on a timer and ASLR.
 -----------------------------------------------------------------------------*/
 
+// https://en.wikipedia.org/wiki/Address_space_layout_randomization
 uintptr_t _mi_os_random_weak(uintptr_t extra_seed) {
   uintptr_t x = (uintptr_t)&_mi_os_random_weak ^ extra_seed; // ASLR makes the address random
   x ^= _mi_prim_clock_now();  

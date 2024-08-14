@@ -76,6 +76,9 @@ bool _mi_os_commit(void* addr, size_t size, bool* is_zero, mi_stats_t* tld_stats
   aligned hinting
 -------------------------------------------------------------- */
 
+// Linux x86_64 virtual memory layout
+//   https://www.kernel.org/doc/Documentation/x86/x86_64/mm.txt
+
 // On 64-bit systems, we can do efficient aligned allocation by using
 // the 2TiB to 30TiB area to allocate those.
 #if (MI_INTPTR_SIZE >= 8)
@@ -94,14 +97,14 @@ static mi_decl_cache_align _Atomic(uintptr_t)aligned_base;
 
 void* _mi_os_get_aligned_hint(size_t try_alignment, size_t size)
 {
-  if (try_alignment <= 1 || try_alignment > MI_SEGMENT_SIZE) return NULL;
-  size = _mi_align_up(size, MI_SEGMENT_SIZE);
+  if (try_alignment <= 1 || try_alignment > MI_SEGMENT_SIZE) return NULL;  // check try_alignment
+  size = _mi_align_up(size, MI_SEGMENT_SIZE);  // align size
   if (size > 1*MI_GiB) return NULL;  // guarantee the chance of fixed valid address is at most 1/(MI_HINT_AREA / 1<<30) = 1/4096.
   #if (MI_SECURE>0)
   size += MI_SEGMENT_SIZE;        // put in `MI_SEGMENT_SIZE` virtual gaps between hinted blocks; this splits VLA's but increases guarded areas.
   #endif
 
-  uintptr_t hint = mi_atomic_add_acq_rel(&aligned_base, size);
+  uintptr_t hint = mi_atomic_add_acq_rel(&aligned_base, size);  // aligned_base += size, and return the previous `aligned_base`
   if (hint == 0 || hint > MI_HINT_MAX) {   // wrap or initialize
     uintptr_t init = MI_HINT_BASE;
     #if (MI_SECURE>0 || MI_DEBUG==0)       // security: randomize start of aligned allocations unless in debug mode
@@ -109,7 +112,7 @@ void* _mi_os_get_aligned_hint(size_t try_alignment, size_t size)
     init = init + ((MI_SEGMENT_SIZE * ((r>>17) & 0xFFFFF)) % MI_HINT_AREA);  // (randomly 20 bits)*4MiB == 0 to 4TiB
     #endif
     uintptr_t expected = hint + size;
-    mi_atomic_cas_strong_acq_rel(&aligned_base, &expected, init);
+    mi_atomic_cas_strong_acq_rel(&aligned_base, &expected, init);  // aligned_base = init
     hint = mi_atomic_add_acq_rel(&aligned_base, size); // this may still give 0 or > MI_HINT_MAX but that is ok, it is a hint after all
   }
   if (hint%try_alignment != 0) return NULL;
@@ -261,7 +264,7 @@ static void* mi_os_prim_alloc_aligned(size_t size, size_t alignment, bool commit
       // and selectively unmap parts around the over-allocated area. 
       void* aligned_p = mi_align_up_ptr(p, alignment);
       size_t pre_size = (uint8_t*)aligned_p - (uint8_t*)p;
-      size_t mid_size = _mi_align_up(size, _mi_os_page_size());
+      size_t mid_size = _mi_align_up(size, _mi_os_page_size());  // need _mi_align_up?
       size_t post_size = over_size - pre_size - mid_size;
       mi_assert_internal(pre_size < over_size&& post_size < over_size&& mid_size >= size);
       if (pre_size > 0)  { mi_os_prim_free(p, pre_size, commit, stats); }
@@ -322,6 +325,13 @@ void* _mi_os_alloc_aligned(size_t size, size_t alignment, bool commit, bool allo
   to use the actual start of the memory region.
 ----------------------------------------------------------- */
 
+// |       extra       |
+// v                   v
+// +-------------------+---------+
+// |                   |         |
+// +-------------------+---------+
+//                     ^
+//                   offset
 void* _mi_os_alloc_aligned_at_offset(size_t size, size_t alignment, size_t offset, bool commit, bool allow_large, mi_memid_t* memid, mi_stats_t* stats) {
   mi_assert(offset <= MI_SEGMENT_SIZE);
   mi_assert(offset <= size);
@@ -459,6 +469,18 @@ bool _mi_os_reset(void* addr, size_t size, mi_stats_t* stats) {
 }
 
 
+// The function _mi_os_purge_ex manages the purging of memory, which involves either resetting or
+// decommitting memory. It returns a boolean indicating whether the memory needs to be recommitted
+// for future use.
+//
+// Return Value:
+//
+// True:
+//    Indicates that the memory needs to be recommitted if it is to be used again in the future.
+// False:
+//    Indicates that the memory does not need to be recommitted after the operation (either because
+//    decommitting was successful or resetting was sufficient).
+//
 // either resets or decommits memory, returns true if the memory needs
 // to be recommitted if it is to be re-used later on.
 bool _mi_os_purge_ex(void* p, size_t size, bool allow_reset, mi_stats_t* stats)
@@ -467,6 +489,8 @@ bool _mi_os_purge_ex(void* p, size_t size, bool allow_reset, mi_stats_t* stats)
   _mi_stat_counter_increase(&stats->purge_calls, 1);
   _mi_stat_increase(&stats->purged, size);
 
+  // Checks if mi_option_purge_decommits is enabled (mi_option_is_enabled(mi_option_purge_decommits))
+  // and ensures it's not during preloading (!_mi_preloading()).
   if (mi_option_is_enabled(mi_option_purge_decommits) &&   // should decommit?
       !_mi_preloading())                                   // don't decommit during preloading (unsafe)
   {
@@ -524,12 +548,22 @@ and possibly associated with a specific NUMA node. (use `numa_node>=0`)
 
 
 #if (MI_INTPTR_SIZE >= 8)
+// static mi_decl_cache_align _Atomic(uintptr_t) mi_huge_start;: Declares a static atomic variable
+// mi_huge_start, which stores the starting address of the allocated huge pages. It ensures atomic
+// operations for thread safety (_Atomic) and potentially aligns the variable in the CPU cache
+// (mi_decl_cache_align).
+//
 // To ensure proper alignment, use our own area for huge OS pages
 static mi_decl_cache_align _Atomic(uintptr_t)  mi_huge_start; // = 0
 
+// size_t pages: Specifies the number of pages to allocate.
+// size_t* total_size: Optional output parameter to return the total allocated size.
+//
 // Claim an aligned address range for huge pages
 static uint8_t* mi_os_claim_huge_pages(size_t pages, size_t* total_size) {
   if (total_size != NULL) *total_size = 0;
+  // Calculates the total size in bytes based on the number of pages (pages) and the size of each
+  // page (MI_HUGE_OS_PAGE_SIZE).
   const size_t size = pages * MI_HUGE_OS_PAGE_SIZE;
 
   uintptr_t start = 0;

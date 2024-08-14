@@ -27,17 +27,31 @@ terms of the MIT license. A copy of the license can be found in the file
 #if defined(_MSC_VER)
 #pragma warning(disable:4127)   // suppress constant conditional warning (due to MI_SECURE paths)
 #pragma warning(disable:26812)  // unscoped enum warning
+// __declspec(noinline)
+//   https://learn.microsoft.com/en-us/cpp/cpp/noinline?view=msvc-170
 #define mi_decl_noinline        __declspec(noinline)
+// __declspec(thread)
+//   https://learn.microsoft.com/en-us/cpp/cpp/thread?view=msvc-170
 #define mi_decl_thread          __declspec(thread)
+// __declspec(align())
+//   https://learn.microsoft.com/en-us/cpp/cpp/align-cpp?view=msvc-170
 #define mi_decl_cache_align     __declspec(align(MI_CACHE_LINE))
 #define mi_decl_weak
 #elif (defined(__GNUC__) && (__GNUC__ >= 3)) || defined(__clang__) // includes clang and icc
+// __attribute__((noinline))
+//   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
 #define mi_decl_noinline        __attribute__((noinline))
+// __thread
+//   https://gcc.gnu.org/onlinedocs/gcc/Thread-Local.html
 #define mi_decl_thread          __thread
+// __attribute__((aligned()))
+//   https://gcc.gnu.org/onlinedocs/gcc/Common-Variable-Attributes.html
+//   https://gcc.gnu.org/onlinedocs/gcc/Common-Function-Attributes.html
 #define mi_decl_cache_align     __attribute__((aligned(MI_CACHE_LINE)))
 #define mi_decl_weak            __attribute__((weak))
 #else
 #define mi_decl_noinline
+// _Thread_local or thread_local?
 #define mi_decl_thread          __thread        // hope for the best :-)
 #define mi_decl_cache_align
 #define mi_decl_weak
@@ -52,6 +66,9 @@ terms of the MIT license. A copy of the license can be found in the file
 #else
 #define mi_decl_externc
 #endif
+
+// pthread.h
+//   https://pubs.opengroup.org/onlinepubs/9699919799.2018edition/
 
 // pthreads
 #if !defined(_WIN32) && !defined(__wasi__)
@@ -235,9 +252,13 @@ bool        _mi_page_is_valid(mi_page_t* page);
 // ------------------------------------------------------
 
 #if defined(__GNUC__) || defined(__clang__)
+// __builtin_expect
+//   https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html
 #define mi_unlikely(x)     (__builtin_expect(!!(x),false))
 #define mi_likely(x)       (__builtin_expect(!!(x),true))
 #elif (defined(__cplusplus) && (__cplusplus >= 202002L)) || (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
+// [[unlikely]], [[likely]]
+//   https://en.cppreference.com/w/cpp/language/attributes/likely
 #define mi_unlikely(x)     (x) [[unlikely]]
 #define mi_likely(x)       (x) [[likely]]
 #else
@@ -245,10 +266,16 @@ bool        _mi_page_is_valid(mi_page_t* page);
 #define mi_likely(x)       (x)
 #endif
 
+// https://clang.llvm.org/docs/LanguageExtensions.html
+
 #ifndef __has_builtin
 #define __has_builtin(x)  0
 #endif
 
+// https://www.gnu.org/software/libc/manual/html_node/Error-Codes.html
+// https://man7.org/linux/man-pages/man3/errno.3.html
+// https://elixir.bootlin.com/linux/latest/source/include/uapi/asm-generic/errno-base.h
+// https://elixir.bootlin.com/linux/latest/source/include/uapi/asm-generic/errno.h
 
 /* -----------------------------------------------------------
   Error codes passed to `_mi_fatal_error`
@@ -277,6 +304,7 @@ bool        _mi_page_is_valid(mi_page_t* page);
 /* -----------------------------------------------------------
   Inlined definitions
 ----------------------------------------------------------- */
+// Avoid warnings for unused variables.
 #define MI_UNUSED(x)     (void)(x)
 #if (MI_DEBUG>0)
 #define MI_UNUSED_RELEASE(x)
@@ -284,6 +312,7 @@ bool        _mi_page_is_valid(mi_page_t* page);
 #define MI_UNUSED_RELEASE(x)  MI_UNUSED(x)
 #endif
 
+// Used for initialization.
 #define MI_INIT4(x)   x(),x(),x(),x()
 #define MI_INIT8(x)   MI_INIT4(x),MI_INIT4(x)
 #define MI_INIT16(x)  MI_INIT8(x),MI_INIT8(x)
@@ -309,6 +338,9 @@ static inline bool _mi_is_aligned(void* p, size_t alignment) {
 }
 
 // Align upwards
+//
+// Example:
+//   sz = 7, alignment = 8, mask = 7, result = 8
 static inline uintptr_t _mi_align_up(uintptr_t sz, size_t alignment) {
   mi_assert_internal(alignment != 0);
   uintptr_t mask = alignment - 1;
@@ -321,6 +353,9 @@ static inline uintptr_t _mi_align_up(uintptr_t sz, size_t alignment) {
 }
 
 // Align downwards
+//
+// Example:
+//   sz = 7, alignment = 8, mask = 7, result = 0
 static inline uintptr_t _mi_align_down(uintptr_t sz, size_t alignment) {
   mi_assert_internal(alignment != 0);
   uintptr_t mask = alignment - 1;
@@ -343,12 +378,14 @@ static inline void* mi_align_down_ptr(void* p, size_t alignment) {
 }
 
 
+// _mi_divide_up: unsigned
 // Divide upwards: `s <= _mi_divide_up(s,d)*d < s+d`.
 static inline uintptr_t _mi_divide_up(uintptr_t size, size_t divider) {
   mi_assert_internal(divider != 0);
   return (divider == 0 ? size : ((size + divider - 1) / divider));
 }
 
+// mi_mem_is_zero: performance
 // Is memory zero initialized?
 static inline bool mi_mem_is_zero(const void* p, size_t size) {
   for (size_t i = 0; i < size; i++) {
@@ -361,10 +398,12 @@ static inline bool mi_mem_is_zero(const void* p, size_t size) {
 // Align a byte size to a size in _machine words_,
 // i.e. byte size == `wsize*sizeof(void*)`.
 static inline size_t _mi_wsize_from_size(size_t size) {
+  // size <= (maximum value of size_t) - sizeof(uintptr_t)
   mi_assert_internal(size <= SIZE_MAX - sizeof(uintptr_t));
   return (size + sizeof(uintptr_t) - 1) / sizeof(uintptr_t);
 }
 
+// https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html
 // Overflow detecting multiply
 #if __has_builtin(__builtin_umul_overflow) || (defined(__GNUC__) && (__GNUC__ >= 5))
 #include <limits.h>      // UINT_MAX, ULONG_MAX
@@ -431,13 +470,18 @@ static inline uintptr_t _mi_ptr_cookie(const void* p) {
   Pages
 ----------------------------------------------------------- */
 
+// fast path: get page from heap->pages_free_direct
 static inline mi_page_t* _mi_heap_get_free_small_page(mi_heap_t* heap, size_t size) {
+  // ensure size satisfy MI_SMALL_SIZE_MAX + MI_PADDING_SIZE
+  // see types.h `struct mi_heap_s`
   mi_assert_internal(size <= (MI_SMALL_SIZE_MAX + MI_PADDING_SIZE));
   const size_t idx = _mi_wsize_from_size(size);
+  // ensure idx is correct
   mi_assert_internal(idx < MI_PAGES_DIRECT);
   return heap->pages_free_direct[idx];
 }
 
+// Pages and their meta data are allocated in a segment.
 // Segment that contains the pointer
 // Large aligned blocks may be aligned at N*MI_SEGMENT_SIZE (inside a huge segment > MI_SEGMENT_SIZE),
 // and we need align "down" to the segment info which is `MI_SEGMENT_SIZE` bytes before it;
@@ -477,6 +521,26 @@ static inline mi_slice_t* mi_slice_first(const mi_slice_t* slice) {
   mi_assert_internal(start + start->slice_count > slice);
   return start;
 }
+
+// +===========+ <------+
+// |   memid   |        |
+// |     .     |        |
+// |     .     |        |
+// |     .     |        |
+// | thread_id |        |
+// +-----------+        +----> mi_segment_t
+// | slices[0] |        |
+// |     .     |        |
+// |     .     |        |
+// |     .     |        |
+// | slices[N] |        |
+// +===========+ <------+
+// |           | slices[0] <----+
+// |           |     .          |
+// |  area[0]  |     .          +--> pages[0]
+// |           |     .          |
+// |           | slices[n] <----+
+// +-----------+
 
 // Get the page containing the pointer (performance critical as it is called in mi_free)
 static inline mi_page_t* _mi_segment_page_of(const mi_segment_t* segment, const void* p) {
@@ -553,6 +617,7 @@ static inline void mi_page_set_heap(mi_page_t* page, mi_heap_t* heap) {
 }
 
 // Thread free flag helpers
+// We use the bottom 2 bits of the pointer for mi_delayed_t flags
 static inline mi_block_t* mi_tf_block(mi_thread_free_t tf) {
   return (mi_block_t*)(tf & ~0x03);
 }
@@ -652,33 +717,44 @@ static inline bool mi_is_in_same_segment(const void* p, const void* q) {
 
 static inline bool mi_is_in_same_page(const void* p, const void* q) {
   mi_segment_t* segment = _mi_ptr_segment(p);
+  // Verifies if both pointers belong to the same memory segment. If not, they cannot be in the same
+  // page.
   if (_mi_ptr_segment(q) != segment) return false;
   // assume q may be invalid // return (_mi_segment_page_of(segment, p) == _mi_segment_page_of(segment, q));
+  // Calculates the page containing pointer p.
   mi_page_t* page = _mi_segment_page_of(segment, p);
   size_t psize;
   uint8_t* start = _mi_segment_page_start(segment, page, &psize);
   return (start <= (uint8_t*)q && (uint8_t*)q < start + psize);
 }
 
+// rotl
+//   https://en.cppreference.com/w/cpp/numeric/rotl
 static inline uintptr_t mi_rotl(uintptr_t x, uintptr_t shift) {
   shift %= MI_INTPTR_BITS;
   return (shift==0 ? x : ((x << shift) | (x >> (MI_INTPTR_BITS - shift))));
 }
+
+// rotr
+//   https://en.cppreference.com/w/cpp/numeric/rotr
 static inline uintptr_t mi_rotr(uintptr_t x, uintptr_t shift) {
   shift %= MI_INTPTR_BITS;
   return (shift==0 ? x : ((x >> shift) | (x << (MI_INTPTR_BITS - shift))));
 }
 
+// decode `x` using `null` and `keys`
 static inline void* mi_ptr_decode(const void* null, const mi_encoded_t x, const uintptr_t* keys) {
   void* p = (void*)(mi_rotr(x - keys[0], keys[0]) ^ keys[1]);
-  return (p==null ? NULL : p);
+  return p == null ? NULL : p;
 }
 
+// encode `p` using `null` and 'keys'
 static inline mi_encoded_t mi_ptr_encode(const void* null, const void* p, const uintptr_t* keys) {
-  uintptr_t x = (uintptr_t)(p==NULL ? null : p);
+  uintptr_t x = (uintptr_t)(p == NULL ? null : p);
   return mi_rotl(x ^ keys[1], keys[0]) + keys[0];
 }
 
+// get the next block
 static inline mi_block_t* mi_block_nextx( const void* null, const mi_block_t* block, const uintptr_t* keys ) {
   mi_track_mem_defined(block,sizeof(mi_block_t));
   mi_block_t* next;
@@ -801,6 +877,7 @@ static inline mi_memid_t _mi_memid_create_os(bool committed, bool is_zero, bool 
 // Fast "random" shuffle
 // -------------------------------------------------------------------
 
+// random shuffle
 static inline uintptr_t _mi_random_shuffle(uintptr_t x) {
   if (x==0) { x = 17; }   // ensure we don't get stuck in generating zeros
 #if (MI_INTPTR_SIZE==8)
@@ -844,6 +921,11 @@ static inline size_t _mi_os_numa_node_count(void) {
 // -----------------------------------------------------------------------
 // Count bits: trailing or leading zeros (with MI_INTPTR_BITS on all zero)
 // -----------------------------------------------------------------------
+
+// https://en.wikipedia.org/wiki/Find_first_set
+//
+// https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html
+//   __builtin_clzl, __builtin_clzll, __builtin_ctzl, __builtin_ctzll
 
 #if defined(__GNUC__)
 
@@ -998,6 +1080,21 @@ static inline void _mi_memcpy_aligned(void* dst, const void* src, size_t n) {
 
 static inline void _mi_memzero_aligned(void* dst, size_t n) {
   mi_assert_internal((uintptr_t)dst % MI_INTPTR_SIZE == 0);
+  // Built-in Function:
+  //    void * __builtin_assume_aligned (const void *exp, size_t align, ...)
+  //
+  // This function returns its first argument, and allows the compiler to assume that the returned
+  // pointer is at least align bytes aligned. This built-in can have either two or three arguments,
+  // if it has three, the third argument should have integer type, and if it is nonzero means
+  // misalignment offset. For example:
+  //
+  //    void *x = __builtin_assume_aligned (arg, 16);
+  //
+  // means that the compiler can assume x, set to arg, is at least 16-byte aligned, while:
+  //
+  //    void *x = __builtin_assume_aligned (arg, 32, 8);
+  //
+  // means that the compiler can assume for x, set to arg, that (char *) x - 8 is 32-byte aligned.
   void* adst = __builtin_assume_aligned(dst, MI_INTPTR_SIZE);
   _mi_memzero(adst, n);
 }

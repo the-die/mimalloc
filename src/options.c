@@ -205,6 +205,15 @@ static void mi_cdecl mi_out_buf(const char* msg, void* arg) {
   if (mi_atomic_load_relaxed(&out_len)>=MI_MAX_DELAY_OUTPUT) return;
   size_t n = _mi_strlen(msg);
   if (n==0) return;
+  //    thread1          thread2
+  // load_relaxed      load_relaxed    | time
+  //                                   |
+  //                                   |
+  // add_acq_rel                       |
+  //                                   |
+  //                   add_acq_rel     |
+  //                                   |
+  //                                   V
   // claim space
   size_t start = mi_atomic_add_acq_rel(&out_len, n);
   if (start >= MI_MAX_DELAY_OUTPUT) return;
@@ -386,6 +395,7 @@ void _mi_warning_message(const char* fmt, ...) {
 }
 
 
+// _mi_assert_fail
 #if MI_DEBUG
 void _mi_assert_fail(const char* assertion, const char* fname, unsigned line, const char* func ) {
   _mi_fprintf(NULL, NULL, "mimalloc: assertion failed: at \"%s\":%u, %s\n  assertion: \"%s\"\n", fname, line, (func==NULL?"":func), assertion);

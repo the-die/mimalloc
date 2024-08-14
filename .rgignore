@@ -1,0 +1,13 @@
+bin/
+build/
+cmake/
+deploy/
+doc/
+docker/
+docs/
+ide/
+test/
+src/prim/emscripten
+src/prim/windows
+src/prim/osx
+src/prim/wasi

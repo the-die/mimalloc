@@ -27,6 +27,9 @@ typedef struct mi_os_mem_config_s {
   size_t  alloc_granularity;    // smallest allocation size (usually 4KiB, on Windows 64KiB)
   bool    has_overcommit;       // can we reserve more memory than can be actually committed?
   bool    has_partial_free;     // can allocated blocks be freed partially? (true for mmap, false for VirtualAlloc)
+  // Virtual Address Space Reservation: Virtual address space is the range of addresses that a
+  // process can potentially use. Reservation means setting aside a range of these addresses without
+  // necessarily committing physical memory to them immediately.
   bool    has_virtual_reserve;  // supports virtual address space reservation? (if true we can reserve virtual address space without using commit or physical memory)
 } mi_os_mem_config_t;
 
@@ -247,6 +250,7 @@ static inline mi_threadid_t _mi_prim_thread_id(void) mi_attr_noexcept {
 #elif MI_USE_BUILTIN_THREAD_POINTER
 
 static inline mi_threadid_t _mi_prim_thread_id(void) mi_attr_noexcept {
+  // https://gcc.gnu.org/git/?p=gcc.git;a=blob_plain;f=gcc/builtins.def
   // Works on most Unix based platforms with recent compilers
   return (uintptr_t)__builtin_thread_pointer();
 }
@@ -331,7 +335,8 @@ static inline mi_heap_t* mi_prim_get_default_heap(void) {
   return heap;
 }
 
-#elif defined(MI_TLS_PTHREAD_SLOT_OFS)
+// __OpenBSD__
+#elif defined(MI_TLS_PTHREAD_SLOT_OFS)  
 
 static inline mi_heap_t** mi_prim_tls_pthread_heap_slot(void) {
   pthread_t self = pthread_self();
@@ -349,6 +354,7 @@ static inline mi_heap_t* mi_prim_get_default_heap(void) {
   return heap;
 }
 
+// __ANDROID__
 #elif defined(MI_TLS_PTHREAD)
 
 extern pthread_key_t _mi_heap_default_key;
@@ -359,7 +365,9 @@ static inline mi_heap_t* mi_prim_get_default_heap(void) {
 
 #else // default using a thread local variable; used on most platforms.
 
+// Each thread gets the default heap.
 static inline mi_heap_t* mi_prim_get_default_heap(void) {
+  // MI_TLS_RECURSE_GUARD?
   #if defined(MI_TLS_RECURSE_GUARD)
   if (mi_unlikely(!_mi_process_is_initialized)) return _mi_heap_main_get();
   #endif

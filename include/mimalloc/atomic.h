@@ -17,7 +17,11 @@ terms of the MIT license. A copy of the license can be found in the file
 // instead of passing the memory order as a parameter.
 // -----------------------------------------------------------------------------------------------
 
+// https://gcc.gnu.org/onlinedocs/cpp/Standard-Predefined-Macros.html
 #if defined(__cplusplus)
+// https://en.cppreference.com/w/cpp/atomic/atomic
+// https://en.cppreference.com/w/c/language/atomic
+// https://en.cppreference.com/w/cpp/atomic/ATOMIC_VAR_INIT
 // Use C++ atomics
 #include <atomic>
 #define  _Atomic(tp)            std::atomic<tp>
@@ -37,6 +41,8 @@ terms of the MIT license. A copy of the license can be found in the file
 #define  mi_atomic(name)        mi_atomic_##name
 #define  mi_memory_order(name)  mi_memory_order_##name
 #else
+// https://en.cppreference.com/w/c/thread
+// https://en.cppreference.com/w/c/atomic/ATOMIC_VAR_INIT
 // Use C11 atomics
 #include <stdatomic.h>
 #define  mi_atomic(name)        atomic_##name
@@ -50,12 +56,35 @@ terms of the MIT license. A copy of the license can be found in the file
 #endif
 #endif
 
+// https://en.wikipedia.org/wiki/ABA_problem
+
+// std::atomic_compare_exchange_weak, std::atomic_compare_exchange_strong
+// std::atomic_compare_exchange_weak_explicit, std::atomic_compare_exchange_strong_explicit
+//   https://en.cppreference.com/w/cpp/atomic/atomic_compare_exchange
+
+// __atomic_compare_exchange_n
+//   https://gcc.gnu.org/onlinedocs/gcc/_005f_005fatomic-Builtins.html
+
+// What’s up with compare_exchange_weak anyway?
+//   https://devblogs.microsoft.com/oldnewthing/20180329-00/?p=98375
+
+// How do I choose between the strong and weak versions of compare-exchange?
+//   https://devblogs.microsoft.com/oldnewthing/20180330-00/?p=98395
+
+// What’s up with this new memory_order_consume memory order?
+//   https://devblogs.microsoft.com/oldnewthing/20230427-00/?p=108107
+
+// Understand std::atomic::compare_exchange_weak() in C++11
+//   https://tonywearme.wordpress.com/2014/08/15/understand-stdatomiccompare_exchange_weak-in-c11/
+
 // Various defines for all used memory orders in mimalloc
 #define mi_atomic_cas_weak(p,expected,desired,mem_success,mem_fail)  \
   mi_atomic(compare_exchange_weak_explicit)(p,expected,desired,mem_success,mem_fail)
 
 #define mi_atomic_cas_strong(p,expected,desired,mem_success,mem_fail)  \
   mi_atomic(compare_exchange_strong_explicit)(p,expected,desired,mem_success,mem_fail)
+
+// https://en.cppreference.com/w/cpp/header/atomic
 
 #define mi_atomic_load_acquire(p)                mi_atomic(load_explicit)(p,mi_memory_order(acquire))
 #define mi_atomic_load_relaxed(p)                mi_atomic(load_explicit)(p,mi_memory_order(relaxed))
@@ -291,6 +320,8 @@ static inline bool mi_atomic_casi64_strong_acq_rel(volatile _Atomic(int64_t*)p, 
 
 #endif
 
+// intptr_t
+//   https://en.cppreference.com/w/cpp/types/integer
 
 // Atomically add a signed value; returns the previous value.
 static inline intptr_t mi_atomic_addi(_Atomic(intptr_t)*p, intptr_t add) {
@@ -301,6 +332,9 @@ static inline intptr_t mi_atomic_addi(_Atomic(intptr_t)*p, intptr_t add) {
 static inline intptr_t mi_atomic_subi(_Atomic(intptr_t)*p, intptr_t sub) {
   return (intptr_t)mi_atomic_addi(p, -sub);
 }
+
+// uintptr_t
+//   https://en.cppreference.com/w/cpp/types/integer
 
 typedef _Atomic(uintptr_t) mi_atomic_once_t;
 
@@ -326,6 +360,7 @@ typedef _Atomic(uintptr_t) mi_atomic_guard_t;
 #if defined(__cplusplus)
 #include <thread>
 static inline void mi_atomic_yield(void) {
+  // https://en.cppreference.com/w/cpp/thread/yield
   std::this_thread::yield();
 }
 #elif defined(_WIN32)
@@ -337,6 +372,7 @@ static inline void mi_atomic_yield(void) {
   YieldProcessor();
 }
 #elif defined(__SSE2__)
+// https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html
 #include <emmintrin.h>
 static inline void mi_atomic_yield(void) {
   _mm_pause();
@@ -345,6 +381,12 @@ static inline void mi_atomic_yield(void) {
       (defined(__x86_64__) || defined(__i386__) || defined(__arm__) || defined(__armel__) || defined(__ARMEL__) || \
        defined(__aarch64__) || defined(__powerpc__) || defined(__ppc__) || defined(__PPC__)) || defined(__POWERPC__)
 #if defined(__x86_64__) || defined(__i386__)
+// PAUSE—Spin Loop Hint
+// Improves the performance of spin-wait loops. When executing a “spin-wait loop,” processors will suffer a severe
+// performance penalty when exiting the loop because it detects a possible memory order violation. The PAUSE
+// instruction provides a hint to the processor that the code sequence is a spin-wait loop. The processor uses this hint
+// to avoid the memory order violation in most situations, which greatly improves processor performance. For this
+// reason, it is recommended that a PAUSE instruction be placed in all spin-wait loops.
 static inline void mi_atomic_yield(void) {
   __asm__ volatile ("pause" ::: "memory");
 }
@@ -383,6 +425,7 @@ static inline void mi_atomic_yield(void) {
   sched_yield();
 }
 #else
+// https://man7.org/linux/man-pages/man3/sleep.3.html
 #include <unistd.h>
 static inline void mi_atomic_yield(void) {
   sleep(0);

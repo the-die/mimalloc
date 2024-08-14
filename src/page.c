@@ -143,6 +143,7 @@ void _mi_page_use_delayed_free(mi_page_t* page, mi_delayed_t delay, bool overrid
   }
 }
 
+// bool override_never: A flag indicating whether to override the MI_NEVER_DELAYED_FREE state.
 bool _mi_page_try_use_delayed_free(mi_page_t* page, mi_delayed_t delay, bool override_never) {
   mi_thread_free_t tfreex;
   mi_delayed_t     old_delay;
@@ -320,12 +321,13 @@ void _mi_heap_delayed_free_all(mi_heap_t* heap) {
 bool _mi_heap_delayed_free_partial(mi_heap_t* heap) {
   // take over the list (note: no atomic exchange since it is often NULL)
   mi_block_t* block = mi_atomic_load_ptr_relaxed(mi_block_t, &heap->thread_delayed_free);
+  // The following statement ensures that the `block` is null or `heap->thread_delayed_free` is set to null.
   while (block != NULL && !mi_atomic_cas_ptr_weak_acq_rel(mi_block_t, &heap->thread_delayed_free, &block, NULL)) { /* nothing */ };
   bool all_freed = true;
 
   // and free them all
   while(block != NULL) {
-    mi_block_t* next = mi_block_nextx(heap,block, heap->keys);
+    mi_block_t* next = mi_block_nextx(heap, block, heap->keys);
     // use internal free instead of regular one to keep stats etc correct
     if (!_mi_free_delayed_block(block)) {
       // we might already start delayed freeing while another thread has not yet

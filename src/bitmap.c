@@ -24,6 +24,12 @@ between the fields. (This is used in arena allocation)
   Bitmap definition
 ----------------------------------------------------------- */
 
+// high           <---            low
+// +--------------------------------+
+// |                                |
+// +--------------------------------+
+//          ^                 ^
+//   bitidx + count         bitidx
 // The bit mask for a given number of blocks at a specified bit index.
 static inline size_t mi_bitmap_mask_(size_t count, size_t bitidx) {
   mi_assert_internal(count + bitidx <= MI_BITMAP_FIELD_BITS);
@@ -38,6 +44,12 @@ static inline size_t mi_bitmap_mask_(size_t count, size_t bitidx) {
   Claim a bit sequence atomically
 ----------------------------------------------------------- */
 
+// high           <---            low
+// +--------------------------------+
+// |                                |
+// +--------------------------------+
+//           ^                 ^
+// bitmap_idx + count      bitmap_idx
 // Try to atomically claim a sequence of `count` bits in a single
 // field at `idx` in `bitmap`. Returns `true` on success.
 inline bool _mi_bitmap_try_find_claim_field(mi_bitmap_t bitmap, size_t idx, const size_t count, mi_bitmap_index_t* bitmap_idx)
@@ -53,6 +65,12 @@ inline bool _mi_bitmap_try_find_claim_field(mi_bitmap_t bitmap, size_t idx, cons
   const size_t mask = mi_bitmap_mask_(count, 0);
   const size_t bitidx_max = MI_BITMAP_FIELD_BITS - count;
 
+  // high           <---            low
+  // +--------------------------------+
+  // |                       100000000|
+  // +--------------------------------+
+  //                         ^
+  //                       bitidx
 #ifdef MI_HAVE_FAST_BITSCAN
   size_t bitidx = mi_ctz(~map);    // quickly find the first zero bit if possible
 #else
@@ -81,6 +99,14 @@ inline bool _mi_bitmap_try_find_claim_field(mi_bitmap_t bitmap, size_t idx, cons
       // on to the next bit range
 #ifdef MI_HAVE_FAST_BITSCAN
       mi_assert_internal(mapm != 0);
+        // high           <---            low
+        // +--------------------------------+
+        // |            |**********|        |
+        // +--------------------------------+
+        // |             001       100000000|
+        // +--------------------------------+
+        //                 ^       ^
+        //              mi_clz   bitidx
       const size_t shift = (count == 1 ? 1 : (MI_INTPTR_BITS - mi_clz(mapm) - bitidx));
       mi_assert_internal(shift > 0 && shift <= count);
 #else
@@ -94,6 +120,13 @@ inline bool _mi_bitmap_try_find_claim_field(mi_bitmap_t bitmap, size_t idx, cons
   return false;
 }
 
+// +--------------------------------+
+// |                                |
+// +--------------------------------+
+//           ^ -------------------->|
+//    start_field_idx          bitmap_fields
+// |-------->
+//  wrap
 // Find `count` bits of 0 and set them to 1 atomically; returns `true` on success.
 // Starts at idx, and wraps around to search in all `bitmap_fields` fields.
 // `count` can be at most MI_BITMAP_FIELD_BITS and will never cross fields.
@@ -109,9 +142,9 @@ bool _mi_bitmap_try_find_from_claim(mi_bitmap_t bitmap, const size_t bitmap_fiel
 }
 
 // Like _mi_bitmap_try_find_from_claim but with an extra predicate that must be fullfilled
-bool _mi_bitmap_try_find_from_claim_pred(mi_bitmap_t bitmap, const size_t bitmap_fields, 
-            const size_t start_field_idx, const size_t count, 
-            mi_bitmap_pred_fun_t pred_fun, void* pred_arg,            
+bool _mi_bitmap_try_find_from_claim_pred(mi_bitmap_t bitmap, const size_t bitmap_fields,
+            const size_t start_field_idx, const size_t count,
+            mi_bitmap_pred_fun_t pred_fun, void* pred_arg,
             mi_bitmap_index_t* bitmap_idx) {
   size_t idx = start_field_idx;
   for (size_t visited = 0; visited < bitmap_fields; visited++, idx++) {
@@ -127,6 +160,11 @@ bool _mi_bitmap_try_find_from_claim_pred(mi_bitmap_t bitmap, const size_t bitmap
   return false;
 }
 
+// +--------------------------------+
+// |                                |
+// +--------------------------------+
+//                   ^
+//               bitmap_idx
 // Set `count` bits at `bitmap_idx` to 0 atomically
 // Returns `true` if all `count` bits were 1 previously.
 bool _mi_bitmap_unclaim(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, mi_bitmap_index_t bitmap_idx) {
@@ -140,6 +178,7 @@ bool _mi_bitmap_unclaim(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, 
 }
 
 
+// like _mi_bitmap_unclaim
 // Set `count` bits at `bitmap_idx` to 1 atomically
 // Returns `true` if all `count` bits were 0 previously. `any_zero` is `true` if there was at least one zero bit.
 bool _mi_bitmap_claim(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, mi_bitmap_index_t bitmap_idx, bool* any_zero) {
@@ -153,6 +192,7 @@ bool _mi_bitmap_claim(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, mi
   return ((prev & mask) == 0);
 }
 
+// like _mi_bitmap_unclaim
 // Returns `true` if all `count` bits were 1. `any_ones` is `true` if there was at least one bit set to one.
 static bool mi_bitmap_is_claimedx(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, mi_bitmap_index_t bitmap_idx, bool* any_ones) {
   const size_t idx = mi_bitmap_index_field(bitmap_idx);
@@ -172,7 +212,8 @@ bool _mi_bitmap_try_claim(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count
   const size_t mask = mi_bitmap_mask_(count, bitidx);
   mi_assert_internal(bitmap_fields > idx); MI_UNUSED(bitmap_fields);
   size_t expected = mi_atomic_load_relaxed(&bitmap[idx]);
-  do  {    
+  do {
+    // check all bits is zero
     if ((expected & mask) != 0) return false;
   } 
   while (!mi_atomic_cas_strong_acq_rel(&bitmap[idx], &expected, expected | mask));
@@ -181,10 +222,12 @@ bool _mi_bitmap_try_claim(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count
 }
 
 
+// like mi_bitmap_is_claimedx
 bool _mi_bitmap_is_claimed(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, mi_bitmap_index_t bitmap_idx) {
   return mi_bitmap_is_claimedx(bitmap, bitmap_fields, count, bitmap_idx, NULL);
 }
 
+// like mi_bitmap_is_claimedx
 bool _mi_bitmap_is_any_claimed(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, mi_bitmap_index_t bitmap_idx) {
   bool any_ones;
   mi_bitmap_is_claimedx(bitmap, bitmap_fields, count, bitmap_idx, &any_ones);
@@ -197,6 +240,13 @@ bool _mi_bitmap_is_any_claimed(mi_bitmap_t bitmap, size_t bitmap_fields, size_t 
 // between the fields. This is used in arena allocation
 //--------------------------------------------------------------------------
 
+// bitmap
+// v
+// |<------            bitmap_fields           ------>|
+// +----------------+----------------+----------------+
+// |                |                |                |
+// +----------------+----------------+----------------+
+//                  |<---   idx  --->|
 // Try to atomically claim a sequence of `count` bits starting from the field
 // at `idx` in `bitmap` and crossing into subsequent fields. Returns `true` on success.
 // Only needs to consider crossing into the next fields (see `mi_bitmap_try_find_from_claim_across`)
@@ -207,6 +257,7 @@ static bool mi_bitmap_try_find_claim_field_across(mi_bitmap_t bitmap, size_t bit
   // check initial trailing zeros
   mi_bitmap_field_t* field = &bitmap[idx];
   size_t map = mi_atomic_load_relaxed(field);
+  // Returns the number of leading 0-bits in x, starting at the most significant bit position.
   const size_t initial = mi_clz(map);  // count of initial zeros starting at idx
   mi_assert_internal(initial <= MI_BITMAP_FIELD_BITS);
   if (initial == 0)     return false;
@@ -219,6 +270,7 @@ static bool mi_bitmap_try_find_claim_field_across(mi_bitmap_t bitmap, size_t bit
   while(found < count) {
     field++;
     map = mi_atomic_load_relaxed(field);
+    // residual bits
     const size_t mask_bits = (found + MI_BITMAP_FIELD_BITS <= count ? MI_BITMAP_FIELD_BITS : (count - found));
     mi_assert_internal(mask_bits > 0 && mask_bits <= MI_BITMAP_FIELD_BITS);
     mask = mi_bitmap_mask_(mask_bits, 0);
@@ -265,6 +317,7 @@ static bool mi_bitmap_try_find_claim_field_across(mi_bitmap_t bitmap, size_t bit
   return true;
 
 rollback:
+  // If the final field fails, there is no need to recover the final field.
   // roll back intermediate fields
   // (we just failed to claim `field` so decrement first)
   while (--field > initial_field) {
@@ -291,6 +344,13 @@ rollback:
 }
 
 
+// +--------------------------------+
+// |                                |
+// +--------------------------------+
+//           ^ -------------------->|
+//    start_field_idx          bitmap_fields
+// |-------->
+//  wrap
 // Find `count` bits of zeros and set them to 1 atomically; returns `true` on success.
 // Starts at idx, and wraps around to search in all `bitmap_fields` fields.
 bool _mi_bitmap_try_find_from_claim_across(mi_bitmap_t bitmap, const size_t bitmap_fields, const size_t start_field_idx, const size_t count, mi_bitmap_index_t* bitmap_idx, mi_stats_t* stats) {
@@ -320,9 +380,17 @@ bool _mi_bitmap_try_find_from_claim_across(mi_bitmap_t bitmap, const size_t bitm
   return false;
 }
 
+// low         ------>        high
+// pre_mask   mid_mask   post_mask
 // Helper for masks across fields; returns the mid count, post_mask may be 0
 static size_t mi_bitmap_mask_across(mi_bitmap_index_t bitmap_idx, size_t bitmap_fields, size_t count, size_t* pre_mask, size_t* mid_mask, size_t* post_mask) {
   MI_UNUSED(bitmap_fields);
+  // <---------
+  // +--------+
+  // |        |
+  // +--------+
+  //      ^
+  //    bitidx
   const size_t bitidx = mi_bitmap_index_bit_in_field(bitmap_idx);
   if mi_likely(bitidx + count <= MI_BITMAP_FIELD_BITS) {
     *pre_mask = mi_bitmap_mask_(count, bitidx);
@@ -397,6 +465,7 @@ bool _mi_bitmap_claim_across(mi_bitmap_t bitmap, size_t bitmap_fields, size_t co
 }
 
 
+// like _mi_bitmap_claim_across
 // Returns `true` if all `count` bits were 1.
 // `any_ones` is `true` if there was at least one bit set to one.
 static bool mi_bitmap_is_claimedx_across(mi_bitmap_t bitmap, size_t bitmap_fields, size_t count, mi_bitmap_index_t bitmap_idx, bool* pany_ones) {

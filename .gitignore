@@ -9,3 +9,6 @@ docs/
 *.zip
 *.tar
 *.gz
+.cache/
+build/
+deploy/
