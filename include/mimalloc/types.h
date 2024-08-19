@@ -30,6 +30,7 @@ terms of the MIT license. A copy of the license can be found in the file
 #pragma warning(disable:4214) // bitfield is not int
 #endif
 
+// https://en.cppreference.com/w/c/types/max_align_t
 // https://en.cppreference.com/w/cpp/types/max_align_t
 
 // Minimal alignment necessary. On most platforms 16 bytes are needed
@@ -319,6 +320,9 @@ typedef struct mi_page_s {
   uint8_t               is_huge:1;         // `true` if the page is in a huge segment (`segment->kind == MI_SEGMENT_HUGE`)
                                            // padding
   // layout like this to optimize access in `mi_malloc` and `mi_free`
+  // +=============+======+
+  // |< capcacity >|      |
+  // |<     reserved     >|
   uint16_t              capacity;          // number of blocks committed, must be the first field, see `segment.c:page_clear`
   uint16_t              reserved;          // number of blocks reserved in memory
   mi_page_flags_t       flags;             // `in_full` and `has_aligned` flags (8 bits)

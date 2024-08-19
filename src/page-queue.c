@@ -36,15 +36,19 @@ terms of the MIT license. A copy of the license can be found in the file
   Queue query
 ----------------------------------------------------------- */
 
+// see init.c:MI_PAGE_QUEUES_EMPTY
 
+// MI_MEDIUM_OBJ_WSIZE_MAX + 1
 static inline bool mi_page_queue_is_huge(const mi_page_queue_t* pq) {
   return (pq->block_size == (MI_MEDIUM_OBJ_SIZE_MAX+sizeof(uintptr_t)));
 }
 
+// MI_MEDIUM_OBJ_WSIZE_MAX + 2
 static inline bool mi_page_queue_is_full(const mi_page_queue_t* pq) {
   return (pq->block_size == (MI_MEDIUM_OBJ_SIZE_MAX+(2*sizeof(uintptr_t))));
 }
 
+// Huge queue and Full queue
 static inline bool mi_page_queue_is_special(const mi_page_queue_t* pq) {
   return (pq->block_size > MI_MEDIUM_OBJ_SIZE_MAX);
 }
@@ -61,29 +65,43 @@ static inline uint8_t mi_bin(size_t size) {
   size_t wsize = _mi_wsize_from_size(size);
   uint8_t bin;
   if (wsize <= 1) {
+    // 0, 1
     bin = 1;
   }
   #if defined(MI_ALIGN4W)
   else if (wsize <= 4) {
+    // [2, 4]
     bin = (uint8_t)((wsize+1)&~1); // round to double word sizes
   }
   #elif defined(MI_ALIGN2W)
   else if (wsize <= 8) {
+    // [2, 8]
     bin = (uint8_t)((wsize+1)&~1); // round to double word sizes
   }
   #else
   else if (wsize <= 8) {
+    // [2, 8]
     bin = (uint8_t)wsize;
   }
   #endif
   else if (wsize > MI_MEDIUM_OBJ_WSIZE_MAX) {
+    // MI_MEDIUM_OBJ_SIZE_MAX == 128KiB == 128 * 1024 == 131072 == 16484 * 8
+    // see init.c:MI_PAGE_QUEUES_EMPTY
+    // large or huge
     bin = MI_BIN_HUGE;
   }
   else {
     #if defined(MI_ALIGN4W)
+    // 4 == 0b100
+    // 3 == 0b11
+    // [5, 16]
     if (wsize <= 16) { wsize = (wsize+3)&~3; } // round to 4x word sizes
     #endif
     wsize--;
+    // wsize: 1000_0000
+    //        ^
+    //      b == 7
+    //
     // find the highest bit
     uint8_t b = (uint8_t)mi_bsr(wsize);  // note: wsize != 0
     // and use the top 3 bits to determine the bin (~12.5% worst internal fragmentation).
@@ -106,6 +124,7 @@ uint8_t _mi_bin(size_t size) {
   return mi_bin(size);
 }
 
+// _mi_heap_empty.pages[bin].block_size
 size_t _mi_bin_size(uint8_t bin) {
   return _mi_heap_empty.pages[bin].block_size;
 }
@@ -141,6 +160,7 @@ static bool mi_heap_contains_queue(const mi_heap_t* heap, const mi_page_queue_t*
 }
 #endif
 
+// It is possible the block size of page is less than or equal to MI_MEDIUM_OBJ_SIZE_MAX, but the page is huge???
 static inline bool mi_page_is_large_or_huge(const mi_page_t* page) {
   return (mi_page_block_size(page) > MI_MEDIUM_OBJ_SIZE_MAX || mi_page_is_huge(page));
 }
@@ -183,11 +203,24 @@ static inline void mi_heap_queue_first_update(mi_heap_t* heap, const mi_page_que
 
   if (pages_free[idx] == page) return;  // already set
 
+  //   prev
+  // +======+
+  // |      |
+  // +======+
+  //
+  //    pq         first                 last
+  // +======+     +------+             +------+
+  // |      | --> |      | --> ... --> |      |
+  // +======+     +------+             +------+
+  //                page
+
   // find start slot
   if (idx<=1) {
     start = 0;
   }
   else {
+    // see init.c:MI_PAGE_QUEUES_EMPTY
+    //
     // find previous size; due to minimal alignment upto 3 previous bins may need to be skipped
     uint8_t bin = mi_bin(size);
     const mi_page_queue_t* prev = pq - 1;
@@ -218,6 +251,12 @@ static void mi_page_queue_remove(mi_page_queue_t* queue, mi_page_t* page) {
                       (mi_page_is_large_or_huge(page) && mi_page_queue_is_huge(queue)) ||
                         (mi_page_is_in_full(page) && mi_page_queue_is_full(queue)));
   mi_heap_t* heap = mi_page_heap(page);
+
+  //                 first                last
+  // +=======+     +------+             +------+
+  // | queue | --> |      | --> ... --> |      |
+  // +=======+     +------+             +------+
+  //                 page
 
   if (page->prev != NULL) page->prev->next = page->next;
   if (page->next != NULL) page->next->prev = page->prev;
@@ -276,6 +315,17 @@ static void mi_page_queue_enqueue_from(mi_page_queue_t* to, mi_page_queue_t* fro
                      (bsize == from->block_size && mi_page_queue_is_full(to)) ||
                      (mi_page_is_large_or_huge(page) && mi_page_queue_is_huge(to)) ||
                      (mi_page_is_large_or_huge(page) && mi_page_queue_is_full(to)));
+
+  //                first                last
+  // +======+     +------+             +------+
+  // | from | --> |      | --> ... --> |      |
+  // +======+     +------+             +------+
+  //                page
+  //
+  //                first                last
+  // +======+     +------+             +------+
+  // |  to  | --> |      | --> ... --> |      |
+  // +======+     +------+             +------+
 
   mi_heap_t* heap = mi_page_heap(page);
   if (page->prev != NULL) page->prev->next = page->next;

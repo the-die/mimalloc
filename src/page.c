@@ -28,6 +28,8 @@ terms of the MIT license. A copy of the license can be found in the file
   Page helpers
 ----------------------------------------------------------- */
 
+// page_start + block_size * i
+//
 // Index a block in a page
 static inline mi_block_t* mi_page_block_at(const mi_page_t* page, void* page_start, size_t block_size, size_t i) {
   MI_UNUSED(page);
@@ -40,6 +42,7 @@ static void mi_page_init(mi_heap_t* heap, mi_page_t* page, size_t size, mi_tld_t
 static void mi_page_extend_free(mi_heap_t* heap, mi_page_t* page, mi_tld_t* tld);
 
 #if (MI_DEBUG>=3)
+// get the `block` count of `page` from `head`
 static size_t mi_page_list_count(mi_page_t* page, mi_block_t* head) {
   size_t count = 0;
   while (head != NULL) {
@@ -192,6 +195,16 @@ static void _mi_page_thread_free_collect(mi_page_t* page)
   // return if the list is empty
   if (head == NULL) return;
 
+  //                         +-------+             +-------+
+  // page->xthread_free ---> |       | --> ... --> |       |
+  //                         +-------+             +-------+
+  //                            head                 tail
+  //
+  //                       +-------+             +-------+
+  // page->local_free ---> |       | --> ... --> |       |
+  //                       +-------+             +-------+
+  //
+
   // find the tail -- also to get a proper count (without data races)
   size_t max_count = page->capacity; // cannot collect more than capacity
   size_t count = 1;
@@ -226,6 +239,12 @@ void _mi_page_free_collect(mi_page_t* page, bool force) {
   // and the local free list
   if (page->local_free != NULL) {
     if mi_likely(page->free == NULL) {
+      //                 +---------+             +---------+
+      // local_free ---> |         | --> ... --> |         |
+      //                 +---------+             +---------+
+      //
+      // free ---> NULL
+      //
       // usual case
       page->free = page->local_free;
       page->local_free = NULL;
@@ -317,6 +336,16 @@ void _mi_heap_delayed_free_all(mi_heap_t* heap) {
   }
 }
 
+//                                             +------------------------------------------------------+
+//                                         +-- | mi_block_set_nextx(heap, block1, block2, heap->kyes) | <--- block1
+// mi_block_nextx(heap, block, heap->keys) |   +------------------------------------------------------+
+//                                         +-> |                                                      | <--- block2
+//                                             +------------------------------------------------------+
+//
+// The function aims to process all the memory blocks in the heap->thread_delayed_free list. It
+// tries to free these blocks and returns true if all blocks were successfully freed, or false if
+// any blocks had to be reinserted into the delayed free list for future processing.
+//
 // returns true if all delayed frees were processed
 bool _mi_heap_delayed_free_partial(mi_heap_t* heap) {
   // take over the list (note: no atomic exchange since it is often NULL)
@@ -354,6 +383,16 @@ void _mi_page_unfull(mi_page_t* page) {
   mi_assert_expensive(_mi_page_is_valid(page));
   mi_assert_internal(mi_page_is_in_full(page));
   if (!mi_page_is_in_full(page)) return;
+
+  // +-------------+
+  // |             |
+  // +-------------+
+  // |      .      |
+  // |      .      |
+  // |      .      |
+  // +-------------+     +------+             +------+
+  // | MI_BIN_FULL | --> |      | --> ... --> |      |
+  // +-------------+     +------+             +------+
 
   mi_heap_t* heap = mi_page_heap(page);
   mi_page_queue_t* pqfull = &heap->pages[MI_BIN_FULL];

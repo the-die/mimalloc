@@ -160,6 +160,12 @@ void mi_free(void* p) mi_attr_noexcept
   }
 }
 
+// The function attempts to free a memory block (block). It returns true if the block was
+// successfully freed and false if the operation could not be completed.
+//   1. Setting delayed free flag for page->xthread_free
+//   2. Collecting Free Lists
+//   3. Freeing the Block
+//
 // return true if successful
 bool _mi_free_delayed_block(mi_block_t* block) {
   // get segment and page

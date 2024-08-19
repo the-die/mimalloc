@@ -563,12 +563,16 @@ static inline uint8_t* mi_page_start(const mi_page_t* page) {
   return page->page_start;
 }
 
+// get mi_page_t
+//
 // Get the page containing the pointer
 static inline mi_page_t* _mi_ptr_page(void* p) {
   mi_assert_internal(p!=NULL);
   return _mi_segment_page_of(_mi_ptr_segment(p), p);
 }
 
+// page->block_size
+//
 // Get the block size of a page (special case for huge objects)
 static inline size_t mi_page_block_size(const mi_page_t* page) {
   mi_assert_internal(page->block_size > 0);
@@ -605,6 +609,8 @@ static inline mi_delayed_t mi_page_thread_free_flag(const mi_page_t* page) {
   return (mi_delayed_t)(mi_atomic_load_relaxed(&((mi_page_t*)page)->xthread_free) & 3);
 }
 
+// page->xheap
+//
 // Heap access
 static inline mi_heap_t* mi_page_heap(const mi_page_t* page) {
   return (mi_heap_t*)(mi_atomic_load_relaxed(&((mi_page_t*)page)->xheap));
@@ -634,6 +640,8 @@ static inline mi_thread_free_t mi_tf_set_block(mi_thread_free_t tf, mi_block_t* 
   return mi_tf_make(block, mi_tf_delayed(tf));
 }
 
+// page->used == 0
+//
 // are all blocks in a page freed?
 // note: needs up-to-date used count, (as the `xthread_free` list may not be empty). see `_mi_page_collect_free`.
 static inline bool mi_page_all_free(const mi_page_t* page) {
@@ -669,18 +677,23 @@ static inline mi_page_queue_t* mi_page_queue(const mi_heap_t* heap, size_t size)
 //-----------------------------------------------------------
 // Page flags
 //-----------------------------------------------------------
+
+// page->flags.x.in_full
 static inline bool mi_page_is_in_full(const mi_page_t* page) {
   return page->flags.x.in_full;
 }
 
+// page->flags.x.in_full = in_full
 static inline void mi_page_set_in_full(mi_page_t* page, bool in_full) {
   page->flags.x.in_full = in_full;
 }
 
+// page->flags.x.has_aligned
 static inline bool mi_page_has_aligned(const mi_page_t* page) {
   return page->flags.x.has_aligned;
 }
 
+// page->flags.x.has_aligned = has_aligned
 static inline void mi_page_set_has_aligned(mi_page_t* page, bool has_aligned) {
   page->flags.x.has_aligned = has_aligned;
 }

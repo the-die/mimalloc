@@ -53,6 +53,38 @@ const mi_page_t _mi_page_empty = {
   #error "define right initialization sizes corresponding to MI_SMALL_WSIZE_MAX"
 #endif
 
+// [0,   8]:   1
+// [9,   16]:  2
+// [17,  32]:  4
+// [32,  48]:  6
+// [49,  64]:  8
+// [65,  80]:  9
+// [81,  96]:  10
+// [97,  112]: 11
+// [113, 128]: 12
+// [129, 160]: 13
+// [161, 192]: 14
+//
+// 1 * 8:  1
+// 2 * 8:  2
+// 3 * 8:  4
+// 4 * 8:  4
+// 5 * 8:  6
+// 6 * 8:  6
+// 7 * 8:  8
+// 8 * 8:  8
+// 9 * 8:  9
+// 10 * 8: 9
+// 11 * 8: 10
+// 12 * 8: 10
+// 13 * 8: 11
+// 14 * 8: 11
+// 15 * 8: 12
+// 16 * 8: 12
+// 17 * 8: 13
+// 18 * 8: 13
+// 19 * 8: 13
+//
 // see types.h `struct mi_page_queue_s`
 // Empty page queues for every bin
 #define QNULL(sz)  { NULL, NULL, (sz)*sizeof(uintptr_t) }
