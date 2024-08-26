@@ -60,6 +60,17 @@ static inline uint8_t* mi_page_area(const mi_page_t* page) {
 }
 */
 
+// page_area
+//   +-------+-------+-------+-------+-------+
+//   | block | ..... | block | ..... | block |
+//   +-------+-------+-------+-------+-------+
+//   ^               ^                       ^
+// start             p                      end
+//
+// The function mi_page_list_is_valid checks whether a linked list of blocks (p) within a memory
+// page (page) is valid, i.e., all blocks are within the allocated range for that page. If the
+// MI_DEBUG level is set high enough, it also checks that free blocks are zeroed out if a specific
+// flag is set.
 static bool mi_page_list_is_valid(mi_page_t* page, mi_block_t* p) {
   size_t psize;
   uint8_t* page_area = _mi_segment_page_start(_mi_page_segment(page), page, &psize);
@@ -242,7 +253,7 @@ void _mi_page_free_collect(mi_page_t* page, bool force) {
       //                 +---------+             +---------+
       // local_free ---> |         | --> ... --> |         |
       //                 +---------+             +---------+
-      //
+      //                                            tail
       // free ---> NULL
       //
       // usual case
@@ -289,6 +300,9 @@ void _mi_page_reclaim(mi_heap_t* heap, mi_page_t* page) {
   mi_assert_expensive(_mi_page_is_valid(page));
 }
 
+// The function mi_page_fresh_alloc is responsible for allocating a new page of memory from a
+// segment, initializing it, and potentially adding it to a page queue.
+//
 // allocate a fresh page from a segment
 static mi_page_t* mi_page_fresh_alloc(mi_heap_t* heap, mi_page_queue_t* pq, size_t block_size, size_t page_alignment) {
   #if !MI_HUGE_PAGE_ABANDON
@@ -306,6 +320,10 @@ static mi_page_t* mi_page_fresh_alloc(mi_heap_t* heap, mi_page_queue_t* pq, size
   #endif
   mi_assert_internal(page_alignment >0 || block_size > MI_MEDIUM_OBJ_SIZE_MAX || _mi_page_segment(page)->kind != MI_SEGMENT_HUGE);
   mi_assert_internal(pq!=NULL || mi_page_block_size(page) >= block_size);
+  // `full_block_size` determines the block size that will be used for this page. If no queue is
+  // provided or if the page is a huge page, the full block size is taken directly from the page;
+  // otherwise, the provided block size is used.
+  //
   // a fresh page was found, initialize it
   const size_t full_block_size = (pq == NULL || mi_page_is_huge(page) ? mi_page_block_size(page) : block_size); // see also: mi_segment_huge_page_alloc
   mi_assert_internal(full_block_size >= block_size);
@@ -550,6 +568,11 @@ void _mi_heap_collect_retired(mi_heap_t* heap, bool force) {
 #define MI_MAX_SLICES       (1UL << MI_MAX_SLICE_SHIFT)
 #define MI_MIN_SLICES       (2)
 
+// +----------+--------+-----+
+// | capacity | extend | ... |
+// +----------+--------+-----+
+// ^                         ^
+// |======== reserve ========|
 static void mi_page_free_list_extend_secure(mi_heap_t* const heap, mi_page_t* const page, const size_t bsize, const size_t extend, mi_stats_t* const stats) {
   MI_UNUSED(stats);
   #if (MI_SECURE<=2)
@@ -607,6 +630,11 @@ static void mi_page_free_list_extend_secure(mi_heap_t* const heap, mi_page_t* co
   page->free = free_start;
 }
 
+// +----------+--------+-----+
+// | capacity | extend | ... |
+// +----------+--------+-----+
+// ^                         ^
+// |======== reserve ========|
 static mi_decl_noinline void mi_page_free_list_extend( mi_page_t* const page, const size_t bsize, const size_t extend, mi_stats_t* const stats)
 {
   MI_UNUSED(stats);

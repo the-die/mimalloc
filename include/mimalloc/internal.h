@@ -556,6 +556,8 @@ static inline mi_page_t* _mi_segment_page_of(const mi_segment_t* segment, const 
   return mi_slice_to_page(slice);
 }
 
+// page->page_start
+//
 // Quick page start for initialized pages
 static inline uint8_t* mi_page_start(const mi_page_t* page) {
   mi_assert_internal(page->page_start != NULL);
@@ -616,6 +618,7 @@ static inline mi_heap_t* mi_page_heap(const mi_page_t* page) {
   return (mi_heap_t*)(mi_atomic_load_relaxed(&((mi_page_t*)page)->xheap));
 }
 
+// page->heap_tag = heap->tag
 static inline void mi_page_set_heap(mi_page_t* page, mi_heap_t* heap) {
   mi_assert_internal(mi_page_thread_free_flag(page) != MI_DELAYED_FREEING);
   mi_atomic_store_release(&page->xheap,(uintptr_t)heap);
