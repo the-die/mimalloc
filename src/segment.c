@@ -24,6 +24,9 @@ static void mi_segment_try_purge(mi_segment_t* segment, bool force, mi_stats_t* 
 // commit mask
 // -------------------------------------------------------------------
 
+// The function mi_commit_mask_all_set checks if all bits that are set in the cm (comparison mask)
+// are also set in the commit mask. In other words, it verifies that every bit set in cm->mask is
+// also set in the corresponding position in commit->mask.
 static bool mi_commit_mask_all_set(const mi_commit_mask_t* commit, const mi_commit_mask_t* cm) {
   for (size_t i = 0; i < MI_COMMIT_MASK_FIELD_COUNT; i++) {
     if ((commit->mask[i] & cm->mask[i]) != cm->mask[i]) return false;
@@ -56,6 +59,9 @@ static void mi_commit_mask_set(mi_commit_mask_t* res, const mi_commit_mask_t* cm
   }
 }
 
+// bitidx: The starting bit index from which to create the mask.
+// bitcount: The number of bits to set in the mask starting from bitidx.
+// cm: A pointer to the mi_commit_mask_t structure, where the resulting bitmask will be stored.
 static void mi_commit_mask_create(size_t bitidx, size_t bitcount, mi_commit_mask_t* cm) {
   mi_assert_internal(bitidx < MI_COMMIT_MASK_BITS);
   mi_assert_internal((bitidx + bitcount) <= MI_COMMIT_MASK_BITS);
@@ -71,6 +77,12 @@ static void mi_commit_mask_create(size_t bitidx, size_t bitcount, mi_commit_mask
     size_t i = bitidx / MI_COMMIT_MASK_FIELD_BITS;
     size_t ofs = bitidx % MI_COMMIT_MASK_FIELD_BITS;
     while (bitcount > 0) {
+      // hi                     lo
+      // +---------+-------------+
+      // |         |             |
+      // +---------+-------------+
+      //           ^             ^
+      //           |     ofs     |
       mi_assert_internal(i < MI_COMMIT_MASK_FIELD_COUNT);
       size_t avail = MI_COMMIT_MASK_FIELD_BITS - ofs;
       size_t count = (bitcount > avail ? avail : bitcount);
@@ -83,6 +95,10 @@ static void mi_commit_mask_create(size_t bitidx, size_t bitcount, mi_commit_mask
   }
 }
 
+// If the commit mask has 10 bits set to 1 (committed) out of a possible 64 bits, and total = 64,000
+// bytes:
+//     Each bit represents 64,000 / 64 = 1,000 bytes.
+//     So the total committed size would be 10 * 1,000 = 10,000 bytes.
 size_t _mi_commit_mask_committed_size(const mi_commit_mask_t* cm, size_t total) {
   mi_assert_internal((total%MI_COMMIT_MASK_BITS)==0);
   size_t count = 0;
@@ -102,6 +118,10 @@ size_t _mi_commit_mask_committed_size(const mi_commit_mask_t* cm, size_t total) 
 }
 
 
+// The function scans a bitmask starting at a given index (*idx) to find the next consecutive
+// sequence (run) of "1"s.
+// It returns the number of consecutive "1"s found and updates *idx to the index of the first "1" in
+// that run.
 size_t _mi_commit_mask_next_run(const mi_commit_mask_t* cm, size_t* idx) {
   size_t i = (*idx) / MI_COMMIT_MASK_FIELD_BITS;
   size_t ofs = (*idx) % MI_COMMIT_MASK_FIELD_BITS;
@@ -174,6 +194,8 @@ static uint8_t* mi_slice_start(const mi_slice_t* slice) {
 ----------------------------------------------------------- */
 // Use bit scan forward to quickly find the first zero bit if it is available
 
+// see init.c:MI_SEGMENT_SPAN_QUEUES_EMPTY
+
 static inline size_t mi_slice_bin8(size_t slice_count) {
   if (slice_count<=1) return slice_count;
   mi_assert_internal(slice_count <= MI_SLICES_PER_SEGMENT);
@@ -192,6 +214,7 @@ static inline size_t mi_slice_bin(size_t slice_count) {
   return bin;
 }
 
+// slice - segment->slices;
 static inline size_t mi_slice_index(const mi_slice_t* slice) {
   mi_segment_t* segment = _mi_ptr_segment(slice);
   ptrdiff_t index = slice - segment->slices;
@@ -204,6 +227,8 @@ static inline size_t mi_slice_index(const mi_slice_t* slice) {
    Slice span queues
 ----------------------------------------------------------- */
 
+// This code defines a function mi_span_queue_push that inserts a new slice at the front of a
+// doubly-linked list (mi_span_queue_t). 
 static void mi_span_queue_push(mi_span_queue_t* sq, mi_slice_t* slice) {
   // todo: or push to the end?
   mi_assert_internal(slice->prev == NULL && slice->next==NULL);
@@ -222,6 +247,8 @@ static mi_span_queue_t* mi_span_queue_for(size_t slice_count, mi_segments_tld_t*
   return sq;
 }
 
+// This code defines a function mi_span_queue_delete that removes a slice from a doubly-linked list
+// (or queue) represented by mi_span_queue_t.
 static void mi_span_queue_delete(mi_span_queue_t* sq, mi_slice_t* slice) {
   mi_assert_internal(slice->block_size==0 && slice->slice_count>0 && slice->slice_offset==0);
   // should work too if the queue does not contain slice (which can happen during reclaim)
@@ -239,6 +266,7 @@ static void mi_span_queue_delete(mi_span_queue_t* sq, mi_slice_t* slice) {
  Invariant checking
 ----------------------------------------------------------- */
 
+// slice->block_size > 0
 static bool mi_slice_is_used(const mi_slice_t* slice) {
   return (slice->block_size > 0);
 }
@@ -308,6 +336,7 @@ static bool mi_segment_is_valid(mi_segment_t* segment, mi_segments_tld_t* tld) {
  Segment size calculations
 ----------------------------------------------------------- */
 
+// segment->segment_info_slices * MI_SEGMENT_SLICE_SIZE
 static size_t mi_segment_info_size(mi_segment_t* segment) {
   return segment->segment_info_slices * MI_SEGMENT_SLICE_SIZE;
 }
@@ -330,13 +359,22 @@ static uint8_t* _mi_segment_page_start_from_slice(const mi_segment_t* segment, c
   // If the adjustment is smaller than the block size and the total slice size is large enough to
   // accommodate the adjustment, the start_offset is increased by the adjustment.
   if (block_size > 0 && block_size <= MI_MAX_ALIGN_GUARANTEE) {
+    // +-----+------------+------------------------+
+    // |     |   adjust   |     >= block_size      |
+    // +-----+------------+------------------------+
+    //       ^                                     ^
+    //       +--------------- psize ---------------+
+    // ^                  ^
+    // +--- block_size ---+
     // for small objects, ensure the page start is aligned with the block size (PR#66 by kickunderscore)
     const size_t adjust = block_size - ((uintptr_t)pstart % block_size);
     if (adjust < block_size && psize >= block_size + adjust) {
       start_offset += adjust;
     }
   }
-  // ???
+  // add start offset to pages to reduce cache/page effects???
+  // e6b58052dae764bf5f1b79ffb65fbbc19596934a
+  // a582d760ed8266af9fab445bf3e06e65d073a6f3
   if (block_size >= MI_INTPTR_SIZE) {
     if (block_size <= 64) { start_offset += 3*block_size; }
     else if (block_size <= 512) { start_offset += block_size; }
@@ -357,10 +395,16 @@ uint8_t* _mi_segment_page_start(const mi_segment_t* segment, const mi_page_t* pa
   return p;
 }
 
-
+// This function calculates the number of slices needed to satisfy a memory request (required) and
+// returns the total number of slices needed for a memory segment, including the overhead slices for
+// metadata (like segment info and guards).
+//
+// required: The amount of memory needed by the caller.
+// info_slices: A pointer to store the number of slices needed for metadata (segment info) if it is
+// not NULL.
 static size_t mi_segment_calculate_slices(size_t required, size_t* info_slices) {
   size_t page_size = _mi_os_page_size();
-  size_t isize     = _mi_align_up(sizeof(mi_segment_t), page_size);
+  size_t isize     = _mi_align_up(sizeof(mi_segment_t), page_size);  // info size
   size_t guardsize = 0;
 
   if (MI_SECURE>0) {
@@ -386,6 +430,7 @@ We keep a small segment cache per thread to increase local
 reuse and avoid setting/clearing guard pages in secure mode.
 ------------------------------------------------------------------------------- */
 
+// update tld->stats->segments, tld->count, tld->peak_count, tld->current_size, tld->peak_size
 static void mi_segments_track_size(long segment_size, mi_segments_tld_t* tld) {
   if (segment_size>=0) _mi_stat_increase(&tld->stats->segments,1);
                   else _mi_stat_decrease(&tld->stats->segments,1);
