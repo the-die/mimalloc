@@ -48,7 +48,6 @@ static inline bool mi_page_queue_is_full(const mi_page_queue_t* pq) {
   return (pq->block_size == (MI_MEDIUM_OBJ_SIZE_MAX+(2*sizeof(uintptr_t))));
 }
 
-// Huge queue and Full queue
 static inline bool mi_page_queue_is_special(const mi_page_queue_t* pq) {
   return (pq->block_size > MI_MEDIUM_OBJ_SIZE_MAX);
 }
@@ -104,6 +103,10 @@ static inline uint8_t mi_bin(size_t size) {
     //
     // find the highest bit
     uint8_t b = (uint8_t)mi_bsr(wsize);  // note: wsize != 0
+    // Example:
+    //    10 -> 0b1010   b: 3   bin: 10
+    //    11 -> 0b1011   b: 3   bin: 10
+    //
     // and use the top 3 bits to determine the bin (~12.5% worst internal fragmentation).
     // - adjust with 3 because we use do not round the first 8 sizes
     //   which each get an exact bin

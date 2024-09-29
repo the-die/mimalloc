@@ -178,6 +178,7 @@ size_t _mi_commit_mask_next_run(const mi_commit_mask_t* cm, size_t* idx) {
 ----------------------------------------------------------- */
 
 
+// return &segment->slices[segment->slice_entries];
 static const mi_slice_t* mi_segment_slices_end(const mi_segment_t* segment) {
   return &segment->slices[segment->slice_entries];
 }
@@ -235,8 +236,10 @@ static void mi_span_queue_push(mi_span_queue_t* sq, mi_slice_t* slice) {
   slice->prev = NULL; // paranoia
   slice->next = sq->first;
   sq->first = slice;
-  if (slice->next != NULL) slice->next->prev = slice;
-                     else sq->last = slice;
+  if (slice->next != NULL)
+    slice->next->prev = slice;
+  else
+    sq->last = slice;
   slice->block_size = 0; // free
 }
 
@@ -449,6 +452,8 @@ static void mi_segment_os_free(mi_segment_t* segment, mi_segments_tld_t* tld) {
     segment->was_reclaimed = false;
   }
   if (MI_SECURE>0) {
+    // see mi_segment_calculate_slices
+    //
     // _mi_os_unprotect(segment, mi_segment_size(segment)); // ensure no more guard pages are set
     // unprotect the guard pages; we cannot just unprotect the whole segment size as part may be decommitted
     size_t os_pagesize = _mi_os_page_size();

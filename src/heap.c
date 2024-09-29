@@ -30,7 +30,7 @@ static bool mi_heap_visit_pages(mi_heap_t* heap, heap_page_visitor_fun* fn, void
 
   // visit all pages
   #if MI_DEBUG>1
-  size_t total = heap->page_count;
+  size_t total = heap->page_count;  // total number of pages in the `pages` queues.
   size_t count = 0;
   #endif
 
@@ -47,7 +47,9 @@ static bool mi_heap_visit_pages(mi_heap_t* heap, heap_page_visitor_fun* fn, void
       page = next; // and continue
     }
   }
+  #if MI_DEBUG>1
   mi_assert_internal(count == total);
+  #endif
   return true;
 }
 

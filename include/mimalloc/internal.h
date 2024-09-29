@@ -398,6 +398,9 @@ static inline bool mi_mem_is_zero(const void* p, size_t size) {
 // Align a byte size to a size in _machine words_,
 // i.e. byte size == `wsize*sizeof(void*)`.
 static inline size_t _mi_wsize_from_size(size_t size) {
+  // SIZE_MAX == UINT64_MAX
+  // sizeof(uintptr_t) == 8
+  //
   // size <= (maximum value of size_t) - sizeof(uintptr_t)
   mi_assert_internal(size <= SIZE_MAX - sizeof(uintptr_t));
   return (size + sizeof(uintptr_t) - 1) / sizeof(uintptr_t);
@@ -455,6 +458,7 @@ static inline bool mi_heap_is_backing(const mi_heap_t* heap) {
   return (heap->tld->heap_backing == heap);
 }
 
+// return heap != &_mi_heap_empty;
 static inline bool mi_heap_is_initialized(mi_heap_t* heap) {
   mi_assert_internal(heap != NULL);
   return (heap != &_mi_heap_empty);
@@ -581,6 +585,7 @@ static inline size_t mi_page_block_size(const mi_page_t* page) {
   return page->block_size;
 }
 
+// page->is_huge
 static inline bool mi_page_is_huge(const mi_page_t* page) {
   mi_assert_internal((page->is_huge && _mi_page_segment(page)->kind == MI_SEGMENT_HUGE) ||
                      (!page->is_huge && _mi_page_segment(page)->kind != MI_SEGMENT_HUGE));
@@ -618,6 +623,7 @@ static inline mi_heap_t* mi_page_heap(const mi_page_t* page) {
   return (mi_heap_t*)(mi_atomic_load_relaxed(&((mi_page_t*)page)->xheap));
 }
 
+// mi_atomic_store_release(&page->xheap,(uintptr_t)heap);
 // page->heap_tag = heap->tag
 static inline void mi_page_set_heap(mi_page_t* page, mi_heap_t* heap) {
   mi_assert_internal(mi_page_thread_free_flag(page) != MI_DELAYED_FREEING);

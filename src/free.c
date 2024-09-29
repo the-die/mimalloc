@@ -413,6 +413,18 @@ static inline bool mi_check_is_double_free(const mi_page_t* page, const mi_block
 // Check for heap block overflow by setting up padding at the end of the block
 // ---------------------------------------------------------------------------
 
+/*
+ * +--------+---------------+-------+--------+
+ * |        |               | delta | canary |
+ * +--------+---------------+-------+--------+
+ * ^        ^               ^                ^
+ * +- size -+---- delta ----+---- padding ---+
+ * |                        |                |
+ * +-- usable_block_size ---+                |
+ * |                                         |
+ * +-------------- block_size ---------------+
+ */
+
 #if MI_PADDING // && !MI_TRACK_ENABLED
 static bool mi_page_decode_padding(const mi_page_t* page, const mi_block_t* block, size_t* delta, size_t* bsize) {
   *bsize = mi_page_usable_block_size(page);

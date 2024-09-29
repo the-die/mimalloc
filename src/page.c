@@ -583,6 +583,12 @@ static void mi_page_free_list_extend_secure(mi_heap_t* const heap, mi_page_t* co
   mi_assert_internal(bsize == mi_page_block_size(page));
   void* const page_area = mi_page_start(page);
 
+  // +---------+--------+---------+
+  // | slice_1 | ...... | slice_n |
+  // +---------+--------+---------+
+  // ^                            ^
+  // |========== extend ==========|
+
   // initialize a randomized free list
   // set up `slice_count` slices to alternate between
   size_t shift = MI_MAX_SLICE_SHIFT;

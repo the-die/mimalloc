@@ -1233,6 +1233,9 @@ static void mi_pthread_done(void* value) {
   }
 }
 
+// Thread-specific Data
+// https://sourceware.org/glibc/manual/latest/html_node/Thread_002dspecific-Data.html
+
 // pthread_key_create
 //   https://man7.org/linux/man-pages/man3/pthread_key_create.3p.html
 //   https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_key_create.html
