@@ -476,6 +476,13 @@ static void mi_segment_os_free(mi_segment_t* segment, mi_segments_tld_t* tld) {
    Commit/Decommit ranges
 ----------------------------------------------------------- */
 
+// segment: A pointer to the memory segment being operated on.
+// conservative: Whether the operation is conservative (decommit) or liberal (commit).
+// p: A pointer to a position inside the segment that serves as the starting address for the operation.
+// size: The size of the memory block to commit or decommit.
+// start_p: The output pointer to the starting address of the block that will be committed/decommitted.
+// full_size: The output variable that stores the full size of the memory block to be committed or decommitted.
+// cm: A data structure representing the commit mask for the memory segment.
 static void mi_segment_commit_mask(mi_segment_t* segment, bool conservative, uint8_t* p, size_t size, uint8_t** start_p, size_t* full_size, mi_commit_mask_t* cm) {
   mi_assert_internal(_mi_ptr_segment(p + 1) == segment);
   mi_assert_internal(segment->kind != MI_SEGMENT_HUGE);
@@ -526,6 +533,10 @@ static void mi_segment_commit_mask(mi_segment_t* segment, bool conservative, uin
   mi_commit_mask_create(bitidx, bitcount, cm);
 }
 
+// The purpose of this function is to ensure that a specific portion of a memory segment is
+// committed, meaning it is backed by physical memory and can be accessed safely. If the region is
+// not fully committed, it commits the required memory. It also clears any scheduled purges for that
+// region, as committing the memory overrides the need for a purge.
 static bool mi_segment_commit(mi_segment_t* segment, uint8_t* p, size_t size, mi_stats_t* stats) {
   mi_assert_internal(mi_commit_mask_all_set(&segment->commit_mask, &segment->purge_mask));
 
@@ -564,6 +575,10 @@ static bool mi_segment_ensure_committed(mi_segment_t* segment, uint8_t* p, size_
   return mi_segment_commit(segment, p, size, stats);
 }
 
+// The function purges a specified range of memory within a segment, optionally decommitting memory
+// pages if supported. It performs a conservative memory purge, meaning that only the necessary
+// portions of memory are reset or decommitted. This helps optimize memory usage by releasing
+// physical memory while keeping the virtual memory mapping intact.
 static bool mi_segment_purge(mi_segment_t* segment, uint8_t* p, size_t size, mi_stats_t* stats) {
   mi_assert_internal(mi_commit_mask_all_set(&segment->commit_mask, &segment->purge_mask));
   if (!segment->allow_purge) return true;
@@ -593,6 +608,9 @@ static bool mi_segment_purge(mi_segment_t* segment, uint8_t* p, size_t size, mi_
   return true;
 }
 
+// This function determines whether to purge memory immediately or delay it. If purging is delayed,
+// it registers the memory block to be purged in the future by updating the segment's purge_mask
+// (which tracks which parts of the segment are scheduled for purging).
 static void mi_segment_schedule_purge(mi_segment_t* segment, uint8_t* p, size_t size, mi_stats_t* stats) {
   if (!segment->allow_purge) return;
 
@@ -633,6 +651,10 @@ static void mi_segment_schedule_purge(mi_segment_t* segment, uint8_t* p, size_t 
   }
 }
 
+// The function tries to purge committed memory in a segment that has been marked for purging, as
+// indicated by the purge_mask. The purge may be forced (immediate) or conditional (based on
+// timing). The memory that is purged will be decommitted, meaning the operating system will free
+// the physical memory backing it.
 static void mi_segment_try_purge(mi_segment_t* segment, bool force, mi_stats_t* stats) {
   if (!segment->allow_purge || segment->purge_expire == 0 || mi_commit_mask_is_empty(&segment->purge_mask)) return;
   mi_msecs_t now = _mi_clock_now();
@@ -666,8 +688,9 @@ void _mi_segment_collect(mi_segment_t* segment, bool force, mi_segments_tld_t* t
    Span free
 ----------------------------------------------------------- */
 
+// mi_atomic_load_relaxed(&segment->thread_id) == 0
 static bool mi_segment_is_abandoned(mi_segment_t* segment) {
-  return (mi_atomic_load_relaxed(&segment->thread_id) == 0);
+  return mi_atomic_load_relaxed(&segment->thread_id) == 0;
 }
 
 // note: can be called on abandoned segments
@@ -678,6 +701,15 @@ static void mi_segment_span_free(mi_segment_t* segment, size_t slice_index, size
   if (slice_count==0) slice_count = 1;
   mi_assert_internal(slice_index + slice_count - 1 < segment->slice_entries);
 
+  // The first slice in the span is updated:
+  //   The `slice_count` is set to indicate how many slices are part of the span.
+  //   `slice_offset` is set to 0 for the first slice.
+  //
+  // If the span consists of more than one slice, the last slice is also updated:
+  //   The `slice_count` of the last slice is set to 0, marking the end of the span.
+  //   The `slice_offset` for the last slice is set to point back to the first slice, using the size of the memory blocks (mi_page_t).
+  //   The `block_size` of the last slice is set to 0, marking it as free.
+  //
   // set first and last slice (the intermediates can be undetermined)
   mi_slice_t* slice = &segment->slices[slice_index];
   slice->slice_count = (uint32_t)slice_count;
@@ -698,8 +730,10 @@ static void mi_segment_span_free(mi_segment_t* segment, size_t slice_index, size
   }
 
   // and push it on the free page queue (if it was not a huge page)
-  if (sq != NULL) mi_span_queue_push( sq, slice );
-             else slice->block_size = 0; // mark huge page as free anyways
+  if (sq != NULL)
+    mi_span_queue_push( sq, slice );
+  else
+    slice->block_size = 0; // mark huge page as free anyways
 }
 
 /*
@@ -712,6 +746,8 @@ static void mi_segment_span_add_free(mi_slice_t* slice, mi_segments_tld_t* tld) 
 }
 */
 
+// The `mi_segment_span_remove_from_queue` function is designed to remove a slice from a span queue
+// in a memory management system.
 static void mi_segment_span_remove_from_queue(mi_slice_t* slice, mi_segments_tld_t* tld) {
   mi_assert_internal(slice->slice_count > 0 && slice->slice_offset==0 && slice->block_size==0);
   mi_assert_internal(_mi_ptr_segment(slice)->kind != MI_SEGMENT_HUGE);
@@ -725,6 +761,10 @@ static mi_slice_t* mi_segment_span_free_coalesce(mi_slice_t* slice, mi_segments_
   mi_segment_t* const segment = _mi_ptr_segment(slice);
   const bool is_abandoned = (segment->thread_id == 0); // mi_segment_is_abandoned(segment);
 
+  // If the segment is of type MI_SEGMENT_HUGE (which deals with large memory allocations), the
+  // slice is simply marked as free by setting slice->block_size = 0. The function then returns
+  // because huge pages do not participate in the free span queues and don’t need coalescing.
+  //
   // for huge pages, just mark as free but don't add to the queues
   if (segment->kind == MI_SEGMENT_HUGE) {
     // issue #691: segment->used can be 0 if the huge page block was freed while abandoned (reclaim will get here in that case)
@@ -739,12 +779,20 @@ static mi_slice_t* mi_segment_span_free_coalesce(mi_slice_t* slice, mi_segments_
   size_t slice_count = slice->slice_count;
   mi_slice_t* next = slice + slice->slice_count;
   mi_assert_internal(next <= mi_segment_slices_end(segment));
+  // The next slice (next) is checked to see if it’s within the segment bounds and if it’s free
+  // (block_size == 0). If it is free, the current slice's slice_count is extended to include the
+  // next slice. If the segment is not abandoned, the next slice is also removed from the free span
+  // queue using mi_segment_span_remove_from_queue.
   if (next < mi_segment_slices_end(segment) && next->block_size==0) {
     // free next block -- remove it from free and merge
     mi_assert_internal(next->slice_count > 0 && next->slice_offset==0);
     slice_count += next->slice_count; // extend
     if (!is_abandoned) { mi_segment_span_remove_from_queue(next, tld); }
   }
+  // Similarly, the previous slice (prev) is checked. If it is free, it is coalesced by extending
+  // the slice_count and the prev slice is removed from the free span queue (if the segment is not
+  // abandoned). The slice pointer is updated to point to the prev slice, effectively merging the
+  // current slice with the previous one.
   if (slice > segment->slices) {
     mi_slice_t* prev = mi_slice_first(slice - 1);
     mi_assert_internal(prev >= segment->slices);
@@ -779,6 +827,12 @@ static mi_page_t* mi_segment_span_allocate(mi_segment_t* segment, size_t slice_i
     return NULL;  // commit failed!
   }
 
+  // After successful memory commitment, the slice's metadata is updated:
+  //   slice_offset is set to 0, indicating that this is the start of the slice span.
+  //   slice_count is set to the number of slices being allocated.
+  //   block_size is updated to reflect the size of the memory block in bytes, which is the number
+  //   of slices multiplied by the slice size (slice_count * MI_SEGMENT_SLICE_SIZE).
+  //
   // convert the slices to a page
   slice->slice_offset = 0;
   slice->slice_count = (uint32_t)slice_count;
@@ -818,6 +872,10 @@ static mi_page_t* mi_segment_span_allocate(mi_segment_t* segment, size_t slice_i
   return page;
 }
 
+// segment: The memory segment containing the slice to be split.
+// slice: The specific slice that is being split.
+// slice_count: The number of slices to keep in the first part (the part being retained for use).
+// tld: Thread-local data used to track statistics and manage segments.
 static void mi_segment_slice_split(mi_segment_t* segment, mi_slice_t* slice, size_t slice_count, mi_segments_tld_t* tld) {
   mi_assert_internal(_mi_ptr_segment(slice) == segment);
   mi_assert_internal(slice->slice_count >= slice_count);
@@ -830,6 +888,9 @@ static void mi_segment_slice_split(mi_segment_t* segment, mi_slice_t* slice, siz
   slice->slice_count = (uint32_t)slice_count;
 }
 
+// The function mi_segments_page_find_and_allocate searches for an available memory page that can
+// satisfy a request for a certain number of slices. If it finds a suitable page, it allocates it;
+// otherwise, it returns NULL.
 static mi_page_t* mi_segments_page_find_and_allocate(size_t slice_count, mi_arena_id_t req_arena_id, mi_segments_tld_t* tld) {
   mi_assert_internal(slice_count*MI_SEGMENT_SLICE_SIZE <= MI_LARGE_OBJ_SIZE_MAX);
   // search from best fit up
@@ -849,6 +910,9 @@ static mi_page_t* mi_segments_page_find_and_allocate(size_t slice_count, mi_aren
           }
           mi_assert_internal(slice != NULL && slice->slice_count == slice_count && slice->block_size > 0);
           mi_page_t* page = mi_segment_span_allocate(segment, mi_slice_index(slice), slice->slice_count, tld);
+          // If the page allocation fails (e.g., due to a memory commit failure), the function
+          // restores the slice to its original state by coalescing it with neighboring free slices
+          // using mi_segment_span_free_coalesce.
           if (page == NULL) {
             // commit failed; return NULL but first restore the slice
             mi_segment_span_free_coalesce(slice, tld);
@@ -869,6 +933,15 @@ static mi_page_t* mi_segments_page_find_and_allocate(size_t slice_count, mi_aren
    Segment allocation
 ----------------------------------------------------------- */
 
+// size_t required: The required size of the segment in bytes.
+// size_t page_alignment: The required alignment for the pages (if non-zero).
+// bool eager_delayed: A flag to determine if large OS pages should be used immediately or delayed.
+// mi_arena_id_t req_arena_id: The ID of the memory arena in which the segment should be allocated.
+// size_t* psegment_slices: Pointer to the number of slices required for the segment.
+// size_t* pinfo_slices: Pointer to the number of slices used for segment metadata.
+// bool commit: Flag to indicate if the allocated memory should be immediately committed.
+// mi_segments_tld_t* tld: Thread-local data used to track segments.
+// mi_os_tld_t* os_tld: Thread-local data for OS-level memory allocation tracking.
 static mi_segment_t* mi_segment_os_alloc( size_t required, size_t page_alignment, bool eager_delayed, mi_arena_id_t req_arena_id,
                                           size_t* psegment_slices, size_t* pinfo_slices,
                                           bool commit, mi_segments_tld_t* tld, mi_os_tld_t* os_tld)
@@ -929,6 +1002,13 @@ static mi_segment_t* mi_segment_os_alloc( size_t required, size_t page_alignment
 }
 
 
+// required: The size of the memory to be allocated (0 means no specific size).
+// page_alignment: Alignment requirement for the pages within the segment.
+// req_arena_id: Specifies the memory arena to allocate from (related to memory regions).
+// tld: Thread-local data for segment management.
+// os_tld: Thread-local data for OS-level memory operations.
+// huge_page: Pointer to a mi_page_t* used for huge page allocations (only set if required > 0).
+//
 // Allocate a segment from the OS aligned to `MI_SEGMENT_SIZE` .
 static mi_segment_t* mi_segment_alloc(size_t required, size_t page_alignment, mi_arena_id_t req_arena_id, mi_segments_tld_t* tld, mi_os_tld_t* os_tld, mi_page_t** huge_page)
 {

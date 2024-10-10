@@ -30,7 +30,9 @@ terms of the MIT license. A copy of the license can be found in the file
 
 // [20481] 64MiB * 8 * 8 * 20480 = 81920GiB = 80TiB
 static _Atomic(uintptr_t) mi_segment_map[MI_SEGMENT_MAP_WSIZE + 1];  // 2KiB per TB with 64MiB segments
+                                                                     // 4Kib per TB with 32MiB segments
 
+// return the index of `mi_segment_map`
 static size_t mi_segment_map_index_of(const mi_segment_t* segment, size_t* bitidx) {
   // note: segment can be invalid or NULL.
   mi_assert_internal(_mi_ptr_segment(segment + 1) == segment); // is it aligned on MI_SEGMENT_SIZE?
@@ -47,6 +49,7 @@ static size_t mi_segment_map_index_of(const mi_segment_t* segment, size_t* bitid
   }
 }
 
+// set the bit index of `mi_segment_map`
 void _mi_segment_map_allocated_at(const mi_segment_t* segment) {
   size_t bitidx;
   size_t index = mi_segment_map_index_of(segment, &bitidx);
@@ -59,6 +62,7 @@ void _mi_segment_map_allocated_at(const mi_segment_t* segment) {
   } while (!mi_atomic_cas_weak_release(&mi_segment_map[index], &mask, newmask));
 }
 
+// unset the bit index of `mi_segment_map`
 void _mi_segment_map_freed_at(const mi_segment_t* segment) {
   size_t bitidx;
   size_t index = mi_segment_map_index_of(segment, &bitidx);
@@ -86,6 +90,14 @@ static mi_segment_t* _mi_segment_of(const void* p) {
 
   // TODO: maintain max/min allocated range for efficiency for more efficient rejection of invalid pointers?
 
+  // +--------- diff ---------+
+  // v                        v
+  // +---------+--------------+---------+
+  // | segment |    ......    | segment |
+  // +---------+--------------+---------+
+  //                          ^
+  //                mi_segement_map[index]
+
   // search downwards for the first segment in case it is an interior pointer
   // could be slow but searches in MI_INTPTR_SIZE * MI_SEGMENT_SIZE (512MiB) steps trough
   // valid huge objects
@@ -105,9 +117,9 @@ static mi_segment_t* _mi_segment_of(const void* p) {
     uintptr_t lomask = mask;
     loindex = index;
     do {
-      loindex--;  
-      lomask = mi_atomic_load_relaxed(&mi_segment_map[loindex]);      
-    } while (lomask != 0 && loindex > 0);
+      loindex--;
+      lomask = mi_atomic_load_relaxed(&mi_segment_map[loindex]);
+    } while (lomask == 0 && loindex > 0);
     if (lomask == 0) return NULL;
     lobitidx = mi_bsr(lomask);    // lomask != 0
   }
