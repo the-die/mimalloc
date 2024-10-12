@@ -693,6 +693,10 @@ static bool mi_segment_is_abandoned(mi_segment_t* segment) {
   return mi_atomic_load_relaxed(&segment->thread_id) == 0;
 }
 
+// 1. update the first (and the last slice) info
+// 2. may purge this slices
+// 3. push slices into span queue
+//
 // note: can be called on abandoned segments
 static void mi_segment_span_free(mi_segment_t* segment, size_t slice_index, size_t slice_count, bool allow_purge, mi_segments_tld_t* tld) {
   mi_assert_internal(slice_index < segment->slice_entries);
@@ -746,6 +750,8 @@ static void mi_segment_span_add_free(mi_slice_t* slice, mi_segments_tld_t* tld) 
 }
 */
 
+// remove the slice from span queue
+//
 // The `mi_segment_span_remove_from_queue` function is designed to remove a slice from a span queue
 // in a memory management system.
 static void mi_segment_span_remove_from_queue(mi_slice_t* slice, mi_segments_tld_t* tld) {
@@ -755,6 +761,10 @@ static void mi_segment_span_remove_from_queue(mi_slice_t* slice, mi_segments_tld
   mi_span_queue_delete(sq, slice);
 }
 
+// 1. remove `next` slice from span queue if it's free
+// 2. remove `prev` slice from span queue if it's free
+// 3. push this slices into span queue
+//
 // note: can be called on abandoned segments
 static mi_slice_t* mi_segment_span_free_coalesce(mi_slice_t* slice, mi_segments_tld_t* tld) {
   mi_assert_internal(slice != NULL && slice->slice_count > 0 && slice->slice_offset == 0);
@@ -816,6 +826,11 @@ static mi_slice_t* mi_segment_span_free_coalesce(mi_slice_t* slice, mi_segments_
    Page allocation
 ----------------------------------------------------------- */
 
+// 1. commit slices
+// 2. update first, mediate and last slice info
+// 3. convert it to page and update page info
+// 4. update segment info
+//
 // Note: may still return NULL if committing the memory failed
 static mi_page_t* mi_segment_span_allocate(mi_segment_t* segment, size_t slice_index, size_t slice_count, mi_segments_tld_t* tld) {
   mi_assert_internal(slice_index < segment->slice_entries);
@@ -872,6 +887,8 @@ static mi_page_t* mi_segment_span_allocate(mi_segment_t* segment, size_t slice_i
   return page;
 }
 
+// split slices (must be removed from span queue) into two part, and push the second part into span queue
+//
 // segment: The memory segment containing the slice to be split.
 // slice: The specific slice that is being split.
 // slice_count: The number of slices to keep in the first part (the part being retained for use).
@@ -888,6 +905,13 @@ static void mi_segment_slice_split(mi_segment_t* segment, mi_slice_t* slice, siz
   slice->slice_count = (uint32_t)slice_count;
 }
 
+// 1. get the span queue
+// 2. traverse the span queue to get the satisfying slices
+// 3. if found suitable slices, remove this from span queue
+// 4. if the slices are more than required, split them
+// 5. update slices info to allocated page
+// 6. if the page allocation failed, free this slices
+//
 // The function mi_segments_page_find_and_allocate searches for an available memory page that can
 // satisfy a request for a certain number of slices. If it finds a suitable page, it allocates it;
 // otherwise, it returns NULL.
@@ -933,6 +957,8 @@ static mi_page_t* mi_segments_page_find_and_allocate(size_t slice_count, mi_aren
    Segment allocation
 ----------------------------------------------------------- */
 
+// allocate segment from OS
+//
 // size_t required: The required size of the segment in bytes.
 // size_t page_alignment: The required alignment for the pages (if non-zero).
 // bool eager_delayed: A flag to determine if large OS pages should be used immediately or delayed.
@@ -953,6 +979,11 @@ static mi_segment_t* mi_segment_os_alloc( size_t required, size_t page_alignment
   size_t alignment = MI_SEGMENT_ALIGN;
 
   if (page_alignment > 0) {
+    // 1. set `alignment` to `page_alignment`
+    // 2. get `info_size`
+    // 3. get `align_offset`
+    // 4. recalculate the number of required slices and info slices
+
     // mi_assert_internal(huge_page != NULL);
     mi_assert_internal(page_alignment >= MI_SEGMENT_ALIGN);
     alignment = page_alignment;
@@ -964,18 +995,21 @@ static mi_segment_t* mi_segment_os_alloc( size_t required, size_t page_alignment
     mi_assert_internal(*psegment_slices > 0 && *psegment_slices <= UINT32_MAX);
   }
 
+  // 5. allocate memory
   const size_t segment_size = (*psegment_slices) * MI_SEGMENT_SLICE_SIZE;
   mi_segment_t* segment = (mi_segment_t*)_mi_arena_alloc_aligned(segment_size, alignment, align_offset, commit, allow_large, req_arena_id, &memid, os_tld);
   if (segment == NULL) {
     return NULL;  // failed to allocate
   }
 
+  // 6. commit slices
   // ensure metadata part of the segment is committed
   mi_commit_mask_t commit_mask;
   if (memid.initially_committed) {
     mi_commit_mask_create_full(&commit_mask);
   }
   else {
+    // 7. if OS commit failed, free the memory
     // at least commit the info slices
     const size_t commit_needed = _mi_divide_up((*pinfo_slices)*MI_SEGMENT_SLICE_SIZE, MI_COMMIT_SIZE);
     mi_assert_internal(commit_needed>0);
@@ -988,6 +1022,7 @@ static mi_segment_t* mi_segment_os_alloc( size_t required, size_t page_alignment
   }
   mi_assert_internal(segment != NULL && (uintptr_t)segment % MI_SEGMENT_SIZE == 0);
 
+  // 8. update segment info
   segment->memid = memid;
   segment->allow_decommit = !memid.is_pinned;
   segment->allow_purge = segment->allow_decommit && (mi_option_get(mi_option_purge_delay) >= 0);
@@ -996,12 +1031,15 @@ static mi_segment_t* mi_segment_os_alloc( size_t required, size_t page_alignment
   segment->purge_expire = 0;
   mi_commit_mask_create_empty(&segment->purge_mask);
 
+  // 9. update track and segment map
   mi_segments_track_size((long)(segment_size), tld);
   _mi_segment_map_allocated_at(segment);
   return segment;
 }
 
 
+// allocate a segment
+//
 // required: The size of the memory to be allocated (0 means no specific size).
 // page_alignment: Alignment requirement for the pages within the segment.
 // req_arena_id: Specifies the memory arena to allocate from (related to memory regions).
@@ -1014,10 +1052,14 @@ static mi_segment_t* mi_segment_alloc(size_t required, size_t page_alignment, mi
 {
   mi_assert_internal((required==0 && huge_page==NULL) || (required>0 && huge_page != NULL));
 
+  // 1. calcuate the number of required slices and info slices
   // calculate needed sizes first
   size_t info_slices;
   size_t segment_slices = mi_segment_calculate_slices(required, &info_slices);
   mi_assert_internal(segment_slices > 0 && segment_slices <= UINT32_MAX);
+
+  // 2. ***eager commit delay*** only if thread count > 1 and current segment count < `mi_option_eager_commit_delay`
+  // 3. ***eager commit*** only if not delay eager commit and mi_option_eager_commit enabled
 
   // Commit eagerly only if not the first N lazy segments (to reduce impact of many threads that allocate just a little)
   const bool eager_delay = (// !_mi_os_has_overcommit() &&             // never delay on overcommit systems
@@ -1026,10 +1068,14 @@ static mi_segment_t* mi_segment_alloc(size_t required, size_t page_alignment, mi
   const bool eager = !eager_delay && mi_option_is_enabled(mi_option_eager_commit);
   bool commit = eager || (required > 0);
 
+  // 4. allocate segment from the OS
+
   // Allocate the segment from the OS
   mi_segment_t* segment = mi_segment_os_alloc(required, page_alignment, eager_delay, req_arena_id,
                                               &segment_slices, &info_slices, commit, tld, os_tld);
   if (segment == NULL) return NULL;
+
+  // 5. zero segment info from size to segment_slices
 
   // zero the segment info? -- not always needed as it may be zero initialized from the OS
   if (!segment->memid.initially_zero) {
@@ -1038,6 +1084,8 @@ static mi_segment_t* mi_segment_alloc(size_t required, size_t page_alignment, mi
     size_t    zsize  = prefix + (sizeof(mi_slice_t) * (segment_slices + 1)); // one more
     _mi_memzero((uint8_t*)segment + ofs, zsize);
   }
+
+  // 6. update the rest of the segment info
 
   // initialize the rest of the segment info
   const size_t slice_entries = (segment_slices > MI_SLICES_PER_SEGMENT ? MI_SLICES_PER_SEGMENT : segment_slices);
@@ -1048,8 +1096,15 @@ static mi_segment_t* mi_segment_alloc(size_t required, size_t page_alignment, mi
   segment->slice_entries = slice_entries;
   segment->kind = (required == 0 ? MI_SEGMENT_NORMAL : MI_SEGMENT_HUGE);
 
+  // 7. update stats->page_committed (only the size of the segment info was calculated, which
+  //    doesn't quite correct)
+
   // _mi_memzero(segment->slices, sizeof(mi_slice_t)*(info_slices+1));
   _mi_stat_increase(&tld->stats->page_committed, mi_segment_info_size(segment));
+
+  // 8. set up guard pages:
+  //    set a guard page for the second half of the segment info
+  //    commit and set a guard page for the second half of the whole segment
 
   // set up guard pages
   size_t guard_slices = 0;
@@ -1065,11 +1120,15 @@ static mi_segment_t* mi_segment_alloc(size_t required, size_t page_alignment, mi
     guard_slices = 1;
   }
 
+  // 9. allocate info pages, update segment->used
+
   // reserve first slices for segment info
   mi_page_t* page0 = mi_segment_span_allocate(segment, 0, info_slices, tld);
   mi_assert_internal(page0!=NULL); if (page0==NULL) return NULL; // cannot fail as we always commit in advance
   mi_assert_internal(segment->used == 1);
   segment->used = 0; // don't count our internal slices towards usage
+
+  // 10. initialize span queue for normal segment, allocate pages for huge segment
 
   // initialize initial free pages
   if (segment->kind == MI_SEGMENT_NORMAL) { // not a huge page
