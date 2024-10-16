@@ -1148,6 +1148,9 @@ static mi_segment_t* mi_segment_alloc(size_t required, size_t page_alignment, mi
 }
 
 
+// 1. remove all slices from span queue
+// 2. update stats
+// 3. return the memory to the OS
 static void mi_segment_free(mi_segment_t* segment, bool force, mi_segments_tld_t* tld) {
   MI_UNUSED(force);
   mi_assert_internal(segment != NULL);
@@ -1188,6 +1191,11 @@ static void mi_segment_free(mi_segment_t* segment, bool force, mi_segments_tld_t
 
 static void mi_segment_abandon(mi_segment_t* segment, mi_segments_tld_t* tld);
 
+// 1. calculate usage and update stats
+// 2. reset the page memory
+// 3. zero the page data, but not the segment fields and heap tag
+// 4. convert the page to slices and free them
+//
 // note: can be called on abandoned pages
 static mi_slice_t* mi_segment_page_clear(mi_page_t* page, mi_segments_tld_t* tld) {
   mi_assert_internal(page->block_size > 0);
@@ -1222,6 +1230,8 @@ static mi_slice_t* mi_segment_page_clear(mi_page_t* page, mi_segments_tld_t* tld
   return slice;
 }
 
+// 1. free the page
+// 2. free the segment
 void _mi_segment_page_free(mi_page_t* page, bool force, mi_segments_tld_t* tld)
 {
   mi_assert(page != NULL);
@@ -1275,6 +1285,9 @@ void _mi_abandoned_await_readers(void) {
    Abandon segment/page
 ----------------------------------------------------------- */
 
+// 1. remove the free pages from the free page queues
+// 2. purge committed memory in the segment
+// 3. mark a specific segment as abandoned
 static void mi_segment_abandon(mi_segment_t* segment, mi_segments_tld_t* tld) {
   mi_assert_internal(segment->used == segment->abandoned);
   mi_assert_internal(segment->used > 0);
@@ -1312,6 +1325,8 @@ static void mi_segment_abandon(mi_segment_t* segment, mi_segments_tld_t* tld) {
   _mi_arena_segment_mark_abandoned(segment);
 }
 
+// 1. increase segment->abandoned
+// 2. if all pages are abandoned, abandon the entire segment
 void _mi_segment_page_abandon(mi_page_t* page, mi_segments_tld_t* tld) {
   mi_assert(page != NULL);
   mi_assert_internal(mi_page_thread_free_flag(page)==MI_NEVER_DELAYED_FREE);
@@ -1384,6 +1399,9 @@ static bool mi_segment_check_free(mi_segment_t* segment, size_t slices_needed, s
   return has_page;
 }
 
+// 1. set right_page_reclaimed to false
+// 2. update segment info and tld info
+//
 // Reclaim an abandoned segment; returns NULL if the segment was freed
 // set `right_page_reclaimed` to `true` if it reclaimed a page of the right `block_size` that was not full.
 static mi_segment_t* mi_segment_reclaim(mi_segment_t* segment, mi_heap_t* heap, size_t requested_block_size, bool* right_page_reclaimed, mi_segments_tld_t* tld) {
@@ -1476,6 +1494,11 @@ void _mi_abandoned_reclaim_all(mi_heap_t* heap, mi_segments_tld_t* tld) {
   }
 }
 
+// 1. The function determines how many times to attempt reclaiming memory segments that have been
+//    abandoned.
+// 2, The number of tries is constrained between 8 and 1024.
+// 3. The calculation depends on a percentage option (mi_option_max_segment_reclaim) and the total
+//    number of abandoned segments in an arena (_mi_arena_segment_abandoned_count()).
 static long mi_segment_get_reclaim_tries(void) {
   // limit the tries to 10% (default) of the abandoned segments with at least 8 and at most 1024 tries.
   const size_t perc = (size_t)mi_option_get_clamp(mi_option_max_segment_reclaim, 0, 100);
@@ -1558,6 +1581,8 @@ void _mi_abandoned_collect(mi_heap_t* heap, bool force, mi_segments_tld_t* tld)
    Reclaim or allocate
 ----------------------------------------------------------- */
 
+// 1. try to reclaim an abandoned segment
+// 2. otherwise allocate a fresh segment
 static mi_segment_t* mi_segment_reclaim_or_alloc(mi_heap_t* heap, size_t needed_slices, size_t block_size, mi_segments_tld_t* tld, mi_os_tld_t* os_tld)
 {
   mi_assert_internal(block_size <= MI_LARGE_OBJ_SIZE_MAX);
@@ -1696,24 +1721,25 @@ void _mi_segment_huge_page_reset(mi_segment_t* segment, mi_page_t* page, mi_bloc
 /* -----------------------------------------------------------
    Page allocation and free
 ----------------------------------------------------------- */
+// allocate page from the segment
 mi_page_t* _mi_segment_page_alloc(mi_heap_t* heap, size_t block_size, size_t page_alignment, mi_segments_tld_t* tld, mi_os_tld_t* os_tld) {
   mi_page_t* page;
-  if mi_unlikely(page_alignment > MI_BLOCK_ALIGNMENT_MAX) {
+  if mi_unlikely(page_alignment > MI_BLOCK_ALIGNMENT_MAX) { // 1. large alignment allocation
     mi_assert_internal(_mi_is_power_of_two(page_alignment));
     mi_assert_internal(page_alignment >= MI_SEGMENT_SIZE);
     if (page_alignment < MI_SEGMENT_SIZE) { page_alignment = MI_SEGMENT_SIZE; }
     page = mi_segment_huge_page_alloc(block_size,page_alignment,heap->arena_id,tld,os_tld);
   }
-  else if (block_size <= MI_SMALL_OBJ_SIZE_MAX) {
+  else if (block_size <= MI_SMALL_OBJ_SIZE_MAX) { // 2. small block allocaiton
     page = mi_segments_page_alloc(heap,MI_PAGE_SMALL,block_size,block_size,tld,os_tld);
   }
-  else if (block_size <= MI_MEDIUM_OBJ_SIZE_MAX) {
+  else if (block_size <= MI_MEDIUM_OBJ_SIZE_MAX) { // 3. medium block allocation
     page = mi_segments_page_alloc(heap,MI_PAGE_MEDIUM,MI_MEDIUM_PAGE_SIZE,block_size,tld, os_tld);
   }
-  else if (block_size <= MI_LARGE_OBJ_SIZE_MAX) {
+  else if (block_size <= MI_LARGE_OBJ_SIZE_MAX) { // 4. large block allocation
     page = mi_segments_page_alloc(heap,MI_PAGE_LARGE,block_size,block_size,tld, os_tld);
   }
-  else {
+  else { // huge block allocation
     page = mi_segment_huge_page_alloc(block_size,page_alignment,heap->arena_id,tld,os_tld);
   }
   mi_assert_internal(page == NULL || _mi_heap_memid_is_suitable(heap, _mi_page_segment(page)->memid));

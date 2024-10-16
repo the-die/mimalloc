@@ -148,6 +148,7 @@ static bool mi_arena_memid_indices(mi_memid_t memid, size_t* arena_index, mi_bit
 static mi_decl_cache_align uint8_t mi_arena_static[MI_ARENA_STATIC_MAX];  // must be cache aligned, see issue #895
 static mi_decl_cache_align _Atomic(size_t) mi_arena_static_top;
 
+// zalloc aligned memory from static arena
 static void* mi_arena_static_zalloc(size_t size, size_t alignment, mi_memid_t* memid) {
   *memid = _mi_memid_none();
   if (size == 0 || size > MI_ARENA_STATIC_MAX) return NULL;
@@ -160,7 +161,7 @@ static void* mi_arena_static_zalloc(size_t size, size_t alignment, mi_memid_t* m
   if (toplow + oversize > MI_ARENA_STATIC_MAX) return NULL;
   const size_t oldtop = mi_atomic_add_acq_rel(&mi_arena_static_top, oversize);
   size_t top = oldtop + oversize;
-  if (top > MI_ARENA_STATIC_MAX) {
+  if (top > MI_ARENA_STATIC_MAX) { // maybe failed, so check again
     // try to roll back, ok if this fails
     mi_atomic_cas_strong_acq_rel(&mi_arena_static_top, &top, oldtop);
     return NULL;
@@ -175,6 +176,7 @@ static void* mi_arena_static_zalloc(size_t size, size_t alignment, mi_memid_t* m
   return p;
 }
 
+// zalloc memory form static arean or OS
 static void* mi_arena_meta_zalloc(size_t size, mi_memid_t* memid, mi_stats_t* stats) {
   *memid = _mi_memid_none();
 
