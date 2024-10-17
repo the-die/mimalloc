@@ -236,24 +236,56 @@ static mi_decl_noinline void* mi_arena_try_alloc_at(mi_arena_t* arena, size_t ar
   MI_UNUSED(arena_index);
   mi_assert_internal(mi_arena_id_index(arena->id) == arena_index);
 
+  // 1. The function attempts to claim needed_bcount blocks in the arena using mi_arena_try_claim().
+  //    If it fails (i.e., there aren't enough available blocks), the function returns NULL, meaning
+  //    the allocation failed.
+  //    If successful, bitmap_index will hold the starting position of the claimed blocks.
   mi_bitmap_index_t bitmap_index;
   if (!mi_arena_try_claim(arena, needed_bcount, &bitmap_index, tld->stats)) return NULL;
 
+  // 2. The function calculates the starting address (p) of the allocated blocks based on the
+  //    bitmap_index.
+  // 3. The function updates the memid structure with the details of the allocation by calling
+  //    mi_memid_create_arena().
+  // 4. The memid is also updated to reflect whether the memory is pinned (i.e., cannot be paged
+  //    out) based on the arena's memid.
+  //
   // claimed it!
   void* p = mi_arena_block_start(arena, bitmap_index);
   *memid = mi_memid_create_arena(arena->id, arena->exclusive, bitmap_index);
   memid->is_pinned = arena->memid.is_pinned;
 
+  // 5. If the arena has a purge list (blocks_purge), the function ensures that none of the newly
+  //    claimed blocks are scheduled for decommitment. It calls _mi_bitmap_unclaim_across() to mark
+  //    the blocks as active in the purge bitmap, meaning they won't be decommitted.
+  //
   // none of the claimed blocks should be scheduled for a decommit
   if (arena->blocks_purge != NULL) {
     // this is thread safe as a potential purge only decommits parts that are not yet claimed as used (in `blocks_inuse`).
     _mi_bitmap_unclaim_across(arena->blocks_purge, arena->field_count, needed_bcount, bitmap_index);
   }
 
+  // 6. If the arena's memory was initially zeroed out (memid.initially_zero), the function checks
+  //    and sets the dirty bits of the claimed blocks using _mi_bitmap_claim_across(). This is to
+  //    track whether the blocks have been modified.
+  //
   // set the dirty bits (todo: no need for an atomic op here?)
   if (arena->memid.initially_zero && arena->blocks_dirty != NULL) {
     memid->initially_zero = _mi_bitmap_claim_across(arena->blocks_dirty, arena->field_count, needed_bcount, bitmap_index, NULL);
   }
+
+  // 7. Always Committed: If arena->blocks_committed == NULL, it means the memory is always
+  //    committed (i.e., always physically backed). In this case, the memid->initially_committed is set to true.
+  //
+  // 8. Conditional Commitment: If commit is true, the function checks whether the blocks are fully
+  //    committed. It calls _mi_bitmap_claim_across() to check the committed bitmap and set
+  //    any_uncommitted to true if any part of the range is uncommitted.
+  //    If any part of the range is uncommitted, the function calls _mi_os_commit() to commit the
+  //    memory, which might also zero out the memory (commit_zero).
+  //    If the commit fails, memid->initially_committed is set to false.
+  //
+  // 9. Already Committed: If no commit is requested, the function simply checks if the blocks are
+  //    already fully committed using _mi_bitmap_is_claimed_across().
 
   // set commit state
   if (arena->blocks_committed == NULL) {
@@ -287,12 +319,49 @@ static mi_decl_noinline void* mi_arena_try_alloc_at(mi_arena_t* arena, size_t ar
 static void* mi_arena_try_alloc_at_id(mi_arena_id_t arena_id, bool match_numa_node, int numa_node, size_t size, size_t alignment,
                                        bool commit, bool allow_large, mi_arena_id_t req_arena_id, mi_memid_t* memid, mi_os_tld_t* tld )
 {
+  // 1. Alignment: MI_UNUSED_RELEASE(alignment) means that the alignment parameter might not be used
+  //    in some builds, but it's checked in debug mode to ensure it doesn't exceed the maximum
+  //    segment alignment (MI_SEGMENT_ALIGN).
+  //
+  // 2. Block Count: bcount is calculated as the number of blocks needed to satisfy the requested
+  //    size.
+  //
+  // 3. Arena Index: The function extracts the arena index from the arena_id using
+  //    mi_arena_id_index() and ensures it's valid by asserting that it's less than the current
+  //    count of arenas (mi_arena_count).
+  //
+  // 4. Size Check: The function checks if the size fits within the block size of the arena.
   MI_UNUSED_RELEASE(alignment);
   mi_assert_internal(alignment <= MI_SEGMENT_ALIGN);
   const size_t bcount = mi_block_count_of_size(size);
   const size_t arena_index = mi_arena_id_index(arena_id);
   mi_assert_internal(arena_index < mi_atomic_load_relaxed(&mi_arena_count));
   mi_assert_internal(size <= mi_arena_block_size(bcount));
+
+  // 5. Loading Arena: The arena is loaded atomically (mi_atomic_load_ptr_acquire) from a global
+  //    array of arenas (mi_arenas) using the calculated arena_index.
+  //
+  // 6. Null Check: If the arena is NULL, the function returns NULL, indicating that the allocation
+  //    failed.
+  //
+  // 7. Large Arena Check: If large arenas are not allowed (allow_large is false), but the current
+  //    arena is marked as large (arena->is_large), the function returns NULL.
+  //
+  // 8. Arena Suitability Check: The function checks if the arena is suitable for allocation using
+  //    mi_arena_id_is_suitable(). This function checks if the arena_id matches the required
+  //    req_arena_id and whether the arena is exclusive.
+  //
+  // 9. NUMA Suitability: If no specific arena is requested (req_arena_id == _mi_arena_id_none()),
+  //    the function checks if the arena is suitable based on the NUMA node.
+  //    NUMA Conditions:
+  //      numa_node < 0 or arena->numa_node < 0 indicates that no specific NUMA node is being
+  //      enforced.
+  //      If arena->numa_node == numa_node, the arena is suitable for the given NUMA node.
+  //    NUMA Matching:
+  //      If match_numa_node is true, the function returns NULL if the arena isn't suitable based on
+  //      NUMA conditions.
+  //      If match_numa_node is false, it does the opposite: the function returns NULL if the arena
+  //      is suitable for the NUMA node.
 
   // Check arena suitability
   mi_arena_t* arena = mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[arena_index]);
@@ -301,10 +370,16 @@ static void* mi_arena_try_alloc_at_id(mi_arena_id_t arena_id, bool match_numa_no
   if (!mi_arena_id_is_suitable(arena->id, arena->exclusive, req_arena_id)) return NULL;
   if (req_arena_id == _mi_arena_id_none()) { // in not specific, check numa affinity
     const bool numa_suitable = (numa_node < 0 || arena->numa_node < 0 || arena->numa_node == numa_node);
-    if (match_numa_node) { if (!numa_suitable) return NULL; }
-                    else { if (numa_suitable) return NULL; }
+    if (match_numa_node) {
+      if (!numa_suitable) return NULL;
+    } else {
+      if (numa_suitable) return NULL;
+    }
   }
 
+  // 10. The function attempts to allocate the requested memory by calling mi_arena_try_alloc_at(),
+  //     which is responsible for actually allocating the memory blocks from the arena.
+  //
   // try to allocate
   void* p = mi_arena_try_alloc_at(arena, arena_index, bcount, commit, memid, tld);
   mi_assert_internal(p == NULL || _mi_is_aligned(p, alignment));
