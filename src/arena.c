@@ -386,31 +386,65 @@ static void* mi_arena_try_alloc_at_id(mi_arena_id_t arena_id, bool match_numa_no
   return p;
 }
 
-
+// The function tries to allocate memory from an arena while considering NUMA node affinity and
+// alignment, and whether large allocations are allowed. It first checks if a specific arena is
+// requested; if not, it tries to allocate memory from any suitable arena.
+//
 // allocate from an arena with fallback to the OS
 static mi_decl_noinline void* mi_arena_try_alloc(int numa_node, size_t size, size_t alignment,
                                                   bool commit, bool allow_large,
                                                   mi_arena_id_t req_arena_id, mi_memid_t* memid, mi_os_tld_t* tld )
 {
+  // 1. The number of available arenas (max_arena) is loaded using an atomic operation. If no arenas
+  //    are available (max_arena == 0), the function returns NULL since there's no place to allocate
+  //    memory from.
   MI_UNUSED(alignment);
   mi_assert_internal(alignment <= MI_SEGMENT_ALIGN);
   const size_t max_arena = mi_atomic_load_relaxed(&mi_arena_count);
   if mi_likely(max_arena == 0) return NULL;
 
   if (req_arena_id != _mi_arena_id_none()) {
+    // 2. If a specific arena ID is requested (req_arena_id != _mi_arena_id_none()), the function
+    //    checks if the requested arena exists by comparing the arena's index
+    //    (mi_arena_id_index(req_arena_id)) with the total number of arenas (max_arena).
+    //
     // try a specific arena if requested
     if (mi_arena_id_index(req_arena_id) < max_arena) {
+      // 3. The function then attempts to allocate memory from the specific arena using
+      //    mi_arena_try_alloc_at_id(). If the allocation succeeds (p != NULL), the function returns
+      //    the allocated pointer.
       void* p = mi_arena_try_alloc_at_id(req_arena_id, true, numa_node, size, alignment, commit, allow_large, req_arena_id, memid, tld);
       if (p != NULL) return p;
     }
   }
   else {
+    // 4. NUMA-Affine Allocation: If no specific arena is requested, the function loops through all
+    //    available arenas (for (size_t i = 0; i < max_arena; i++)) and tries to allocate memory
+    //    from an arena that matches the specified NUMA node (numa_node).
+    //
+    //    NUMA Affinity: The true argument in mi_arena_try_alloc_at_id() indicates that the function
+    //    is trying to match the requested NUMA node.
+    //
+    //    Return on Success: If a suitable arena is found and memory is allocated successfully (p !=
+    //    NULL), the function returns the pointer to the allocated memory.
+    //
     // try numa affine allocation
     for (size_t i = 0; i < max_arena; i++) {
       void* p = mi_arena_try_alloc_at_id(mi_arena_id_create(i), true, numa_node, size, alignment, commit, allow_large, req_arena_id, memid, tld);
       if (p != NULL) return p;
     }
 
+    // 5. Try Other NUMA Nodes: If the initial attempt to allocate memory from a NUMA-affine arena
+    //    fails, the function tries again but relaxes the NUMA constraint.
+    //
+    //    No NUMA Constraint: In this second loop, the false argument in mi_arena_try_alloc_at_id()
+    //    indicates that the function will allocate memory from an arena even if it doesn't match
+    //    the requested NUMA node.
+    //
+    //    Condition: This fallback only occurs if numa_node is specified (i.e., numa_node >= 0). If
+    //    no specific NUMA node is requested (numa_node < 0), the function has already tried all
+    //    available arenas.
+    //
     // try from another numa node instead..
     if (numa_node >= 0) {  // if numa_node was < 0 (no specific affinity requested), all arena's have been tried already
       for (size_t i = 0; i < max_arena; i++) {
@@ -425,15 +459,43 @@ static mi_decl_noinline void* mi_arena_try_alloc(int numa_node, size_t size, siz
 // try to reserve a fresh arena space
 static bool mi_arena_reserve(size_t req_size, bool allow_large, mi_arena_id_t req_arena_id, mi_arena_id_t *arena_id)
 {
+  // 1. Preloading Check: If the system is still in the preloading phase (_mi_preloading() returns
+  //    true), the function immediately returns false. This ensures that no arena reservations are
+  //    made during preloading, and memory is only obtained from the OS during this phase.
+  //
+  // 2. Arena Request Check: If a specific arena ID is provided (req_arena_id !=
+  //    _mi_arena_id_none()), the function does not reserve new arenas and returns false. This
+  //    indicates that the function is only for allocating memory when no specific arena is
+  //    requested.
   if (_mi_preloading()) return false;  // use OS only while pre loading
   if (req_arena_id != _mi_arena_id_none()) return false;
 
+  // 3. Limit on Arena Count: The function retrieves the current number of arenas (arena_count). If
+  //    the total count is too high (i.e., greater than MI_MAX_ARENAS - 4), it returns false to
+  //    prevent excessive arena reservations.
   const size_t arena_count = mi_atomic_load_acquire(&mi_arena_count);
   if (arena_count > (MI_MAX_ARENAS - 4)) return false;
 
+  // 4. Getting Arena Reserve Size: The function fetches the current reserved size for arenas using
+  //    mi_option_get_size(mi_option_arena_reserve). If the reserved size is zero (arena_reserve ==
+  //    0), it means no arenas are reserved, and the function returns false.
   size_t arena_reserve = mi_option_get_size(mi_option_arena_reserve);
   if (arena_reserve == 0) return false;
 
+  // 5. Virtual Reserve Support: If the operating system doesn't support virtual memory reservation
+  //    (_mi_os_has_virtual_reserve() returns false), the reserved size is scaled down by a factor
+  //    of 4 to be more conservative.
+  //
+  //    Alignment: The reserved size is aligned up to the arena block size (MI_ARENA_BLOCK_SIZE) to
+  //    ensure proper memory boundaries.
+  //
+  //    Exponential Scaling: The reserved size scales up exponentially if the number of arenas is
+  //    between 8 and 128. The scaling factor is based on the current number of arenas (arena_count
+  //    / 8). This ensures that more memory is reserved as the number of arenas grows.
+  //
+  //    Size Check: If the reserved size is smaller than the requested size (arena_reserve <
+  //    req_size), the function returns false. This ensures that the reservation can handle the
+  //    current allocation.
   if (!_mi_os_has_virtual_reserve()) {
     arena_reserve = arena_reserve/4;  // be conservative if virtual reserve is not supported (for WASM for example)
   }
@@ -443,30 +505,81 @@ static bool mi_arena_reserve(size_t req_size, bool allow_large, mi_arena_id_t re
   }
   if (arena_reserve < req_size) return false;  // should be able to at least handle the current allocation size
 
+  // 6. Eager Commit Option: The function checks whether memory should be committed eagerly:
+  //
+  //    If the mi_option_arena_eager_commit option is set to 2, it checks if the operating system
+  //    supports memory overcommit (_mi_os_has_overcommit()). Overcommit allows memory to be
+  //    allocated even when there's not enough physical memory available, and it will only be used
+  //    when needed.
+  //
+  //    If the option is set to 1, the memory is always committed eagerly (arena_commit = true).
+  //
+  //    Otherwise, no eager commit happens (arena_commit remains false).
+  //
   // commit eagerly?
   bool arena_commit = false;
   if (mi_option_get(mi_option_arena_eager_commit) == 2)      { arena_commit = _mi_os_has_overcommit(); }
   else if (mi_option_get(mi_option_arena_eager_commit) == 1) { arena_commit = true; }
 
+  // 7. Reserving Memory: The function calls mi_reserve_os_memory_ex() to reserve memory from the
+  //    operating system. The parameters include:
+  //
+  //      arena_reserve: The size of the memory to reserve.
+  //      arena_commit: Whether the memory should be committed eagerly.
+  //      allow_large: Whether large allocations are allowed.
+  //      false: Indicates the arena is not exclusive.
+  //      arena_id: Pointer to store the ID of the reserved arena.
+  //
+  //    Return Value: If the memory reservation is successful (mi_reserve_os_memory_ex() returns 0), the function returns true. Otherwise, it returns false.
   return (mi_reserve_os_memory_ex(arena_reserve, arena_commit, allow_large, false /* exclusive? */, arena_id) == 0);
 }
 
 
+// This function, _mi_arena_alloc_aligned(), is responsible for allocating memory that meets
+// specific alignment requirements. It tries to allocate memory from an arena first and, if that
+// fails or isn't allowed, it falls back to allocating memory directly from the operating system
+// (OS).
 void* _mi_arena_alloc_aligned(size_t size, size_t alignment, size_t align_offset, bool commit, bool allow_large,
                               mi_arena_id_t req_arena_id, mi_memid_t* memid, mi_os_tld_t* tld)
 {
+  // 1. Initialize the memid to a default "none" state (_mi_memid_none()), which is used when no
+  //    memory has been allocated yet.
   mi_assert_internal(memid != NULL && tld != NULL);
   mi_assert_internal(size > 0);
   *memid = _mi_memid_none();
 
+  // 2. Determine the NUMA (Non-Uniform Memory Access) node for the current thread using
+  //    _mi_os_numa_node(). This helps allocate memory in a memory region local to the CPU,
+  //    improving performance.
   const int numa_node = _mi_os_numa_node(tld); // current numa node
 
+  // 3. Check if arena allocation is allowed based on the global configuration
+  //    (mi_option_disallow_arena_alloc). Alternatively, if a specific arena is requested
+  //    (req_arena_id != _mi_arena_id_none()), the function will try to allocate memory from the
+  //    specified arena.
+  //
   // try to allocate in an arena if the alignment is small enough and the object is not too small (as for heap meta data)
   if (!mi_option_is_enabled(mi_option_disallow_arena_alloc) || req_arena_id != _mi_arena_id_none()) {  // is arena allocation allowed?
+    // 4. Initial Arena Conditions: If the requested size is large enough (size >=
+    //    MI_ARENA_MIN_OBJ_SIZE), and the alignment is within the maximum segment alignment
+    //    (alignment <= MI_SEGMENT_ALIGN), and there's no additional alignment offset
+    //    (align_offset == 0), the function tries to allocate memory from an arena using
+    //    mi_arena_try_alloc().
+    //
+    //   If the allocation succeeds (p != NULL), the function immediately returns the allocated
+    //   memory.
     if (size >= MI_ARENA_MIN_OBJ_SIZE && alignment <= MI_SEGMENT_ALIGN && align_offset == 0) {
       void* p = mi_arena_try_alloc(numa_node, size, alignment, commit, allow_large, req_arena_id, memid, tld);
       if (p != NULL) return p;
 
+      // 5. Reserve a New Arena: If no specific arena was requested (req_arena_id ==
+      //    _mi_arena_id_none()), the function attempts to reserve a new arena using
+      //    mi_arena_reserve().
+      //
+      //    If the reservation succeeds, the function tries to allocate memory from the newly
+      //    reserved arena using mi_arena_try_alloc_at_id(). If successful, the function returns the
+      //    allocated memory.
+      //
       // otherwise, try to first eagerly reserve a new arena
       if (req_arena_id == _mi_arena_id_none()) {
         mi_arena_id_t arena_id = 0;
@@ -480,11 +593,26 @@ void* _mi_arena_alloc_aligned(size_t size, size_t alignment, size_t align_offset
     }
   }
 
+  // 6. Check for OS Allocation: If OS-based allocation is disallowed (mi_option_disallow_os_alloc)
+  //    or a specific arena was requested (req_arena_id != _mi_arena_id_none()), the function does
+  //    not proceed with OS-based memory allocation. Instead, it returns NULL and sets the error
+  //    code to ENOMEM (out of memory).
+
   // if we cannot use OS allocation, return NULL
   if (mi_option_is_enabled(mi_option_disallow_os_alloc) || req_arena_id != _mi_arena_id_none()) {
     errno = ENOMEM;
     return NULL;
   }
+
+  // 7. Fall Back to OS Allocation: If arena allocation is not allowed or fails, and OS-based
+  //    allocation is allowed, the function falls back to allocating memory directly from the OS.
+  //    There are two cases:
+  //
+  //    With Offset: If align_offset is greater than zero, the function calls
+  //    _mi_os_alloc_aligned_at_offset() to allocate aligned memory with a specific offset.
+  //
+  //    Without Offset: If align_offset is zero, the function calls _mi_os_alloc_aligned() to
+  //    allocate aligned memory normally.
 
   // finally, fall back to the OS
   if (align_offset > 0) {
@@ -502,12 +630,31 @@ void* _mi_arena_alloc(size_t size, bool commit, bool allow_large, mi_arena_id_t 
 
 
 void* mi_arena_area(mi_arena_id_t arena_id, size_t* size) {
+  // 1. Optional Size Handling: If the caller provides a valid size pointer, the function
+  //    initializes it to zero. This ensures that if the function fails early (e.g., invalid
+  //    arena_id), the caller still gets a valid result (0 size).
   if (size != NULL) *size = 0;
+  // 2. Arena Index Calculation: The function extracts the index of the arena from the given
+  //    arena_id using mi_arena_id_index().
+  //
+  //    If the calculated arena_index is greater than or equal to the maximum number of arenas
+  //    (MI_MAX_ARENAS), the function returns NULL because the arena_id is invalid or out of bounds.
   size_t arena_index = mi_arena_id_index(arena_id);
   if (arena_index >= MI_MAX_ARENAS) return NULL;
+  // 3. Arena Existence Check: The function attempts to load the arena pointer from the mi_arenas[]
+  //    array using mi_atomic_load_ptr_acquire() (which ensures thread safety).
+  //
+  //    If no arena exists at the calculated index (i.e., arena is NULL), the function returns NULL.
   mi_arena_t* arena = mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[arena_index]);
   if (arena == NULL) return NULL;
+  // 4. Optional Size Calculation: If the size pointer is not NULL, the function calculates the
+  //    total size of the memory block using mi_arena_block_size(), which computes the size based on
+  //    the number of blocks (arena->block_count) in the arena.
+  //
+  //    The size is stored in the location pointed to by size.
   if (size != NULL) { *size = mi_arena_block_size(arena->block_count); }
+  // 5. Memory Start Address: The function returns the start address of the memory region associated
+  //    with the arena. This address is stored in arena->start.
   return arena->start;
 }
 
@@ -524,6 +671,19 @@ static long mi_arena_purge_delay(void) {
 // reset or decommit in an arena and update the committed/decommit bitmaps
 // assumes we own the area (i.e. blocks_in_use is claimed by us)
 static void mi_arena_purge(mi_arena_t* arena, size_t bitmap_idx, size_t blocks, mi_stats_t* stats) {
+  // 1. Committed Check: The function checks if all the blocks in the bitmap range are committed by
+  //    consulting the blocks_committed bitmap.
+  //
+  //    If all blocks are committed, it calls _mi_os_purge() to purge the memory and mark it as
+  //    available again.
+  //    needs_recommit is set based on whether the memory will need to be recommitted later. This is
+  //    determined by _mi_os_purge().
+  //
+  // 2. Partial Commitment: If some blocks are not committed (i.e., only part of the memory range is
+  //    committed), the function purges the memory using _mi_os_purge_ex().
+  //
+  //    Stats Update: If the memory needs to be recommitted, the function updates the committed
+  //    stats by increasing the committed memory size.
   mi_assert_internal(arena->blocks_committed != NULL);
   mi_assert_internal(arena->blocks_purge != NULL);
   mi_assert_internal(!arena->memid.is_pinned);
@@ -544,6 +704,12 @@ static void mi_arena_purge(mi_arena_t* arena, size_t bitmap_idx, size_t blocks, 
     if (needs_recommit) { _mi_stat_increase(&_mi_stats_main.committed, size); }
   }
 
+  // 3. Purge Bitmap Update: The function updates the blocks_purge bitmap to mark the blocks as no
+  //    longer purged, reflecting that they have been reset or decommitted.
+  //
+  // 4. Committed Bitmap Update: If the memory needs to be recommitted, the function updates the
+  //    blocks_committed bitmap to mark the blocks as no longer committed.
+  //
   // clear the purged blocks
   _mi_bitmap_unclaim_across(arena->blocks_purge, arena->field_count, blocks, bitmap_idx);
   // update committed bitmap
@@ -552,6 +718,32 @@ static void mi_arena_purge(mi_arena_t* arena, size_t bitmap_idx, size_t blocks, 
   }
 }
 
+// 1. Delay Calculation: The function first calculates the purge delay using mi_arena_purge_delay().
+//    This delay defines when the actual purge (decommit) will happen.
+//
+//    Purge Check: If delay is negative, purging is not allowed, and the function returns
+//    immediately without performing any operations.
+//
+// 2. Preloading Check: If the system is in a "preloading" state (_mi_preloading() returns true), or
+//    if the purge delay is zero (delay == 0), the function immediately calls mi_arena_purge() to
+//    purge the memory blocks. This directly decommits the memory.
+//
+//    Reason for Immediate Purge: Preloading may have stricter memory constraints, so purging is
+//    forced. A delay of zero means the system wants to avoid delaying memory purging operations.
+//
+// 3. Delayed Purge Logic: If the purge is not immediate, the function schedules it to happen after
+//    the calculated delay.
+//
+//    purge_expire: This is a timestamp that indicates when the purge is set to happen.
+//    If purge_expire is non-zero, it means a purge is already scheduled. The function adds a small
+//    additional delay (delay/10) to extend the scheduled purge slightly.
+//    If purge_expire is zero, the function sets it to the current time (_mi_clock_now()) plus the
+//    calculated delay.
+//
+//    Marking Blocks for Purging: Finally, it marks the memory blocks as purged in the blocks_purge
+//    bitmap by calling _mi_bitmap_claim_across(). This function flags the blocks for future
+//    decommitment.
+//
 // Schedule a purge. This is usually delayed to avoid repeated decommit/commit calls.
 // Note: assumes we (still) own the area as we may purge immediately
 static void mi_arena_schedule_purge(mi_arena_t* arena, size_t bitmap_idx, size_t blocks, mi_stats_t* stats) {
