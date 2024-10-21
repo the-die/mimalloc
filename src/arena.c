@@ -768,6 +768,10 @@ static void mi_arena_schedule_purge(mi_arena_t* arena, size_t bitmap_idx, size_t
   }
 }
 
+// The function mi_arena_purge_range() is designed to purge a specified range of memory blocks
+// within a given arena. Purging refers to the process of decommitting memory that is no longer in
+// use, effectively freeing it for other purposes.
+//
 // purge a range of blocks
 // return true if the full range was purged.
 // assumes we own the area (i.e. blocks_in_use is claimed by us)
@@ -776,6 +780,10 @@ static bool mi_arena_purge_range(mi_arena_t* arena, size_t idx, size_t startidx,
   size_t bitidx = startidx;
   bool all_purged = false;
   while (bitidx < endidx) {
+    // For each bit in the purge bitmask, the inner loop counts how many consecutive bits are set to
+    // 1 (indicating that those corresponding blocks should be purged).
+    // count holds the number of consecutive bits that are marked for purging.
+    //
     // count consequetive ones in the purge mask
     size_t count = 0;
     while (bitidx + count < endidx && (purge & ((size_t)1 << (bitidx + count))) != 0) {
@@ -789,6 +797,9 @@ static bool mi_arena_purge_range(mi_arena_t* arena, size_t idx, size_t startidx,
         all_purged = true;
       }
     }
+    // The bitidx is updated to skip over the purged bits and move to the next position. The +1 is
+    // used to skip the zero bit after the last counted purged block, effectively moving to the next
+    // unpurged block.
     bitidx += (count+1); // +1 to skip the zero bit (or end)
   }
   return all_purged;
