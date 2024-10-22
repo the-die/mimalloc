@@ -805,23 +805,43 @@ static bool mi_arena_purge_range(mi_arena_t* arena, size_t idx, size_t startidx,
   return all_purged;
 }
 
+// The function mi_arena_try_purge() is responsible for attempting to purge (decommit) memory blocks
+// in a memory arena. It evaluates whether to perform a purge based on timing conditions and then
+// executes the actual purging of the blocks that are marked for it.
+//
 // returns true if anything was purged
 static bool mi_arena_try_purge(mi_arena_t* arena, mi_msecs_t now, bool force, mi_stats_t* stats)
 {
+  // If the arena is "pinned" (meaning it cannot be purged) or if there are no blocks scheduled for
+  // purging, the function returns false.
   if (arena->memid.is_pinned || arena->blocks_purge == NULL) return false;
+  // The expiration time for purging is loaded.
+  // If the expiration time is zero or if purging is not forced and the current time is less than
+  // the expiration, the function returns false.
   mi_msecs_t expire = mi_atomic_loadi64_relaxed(&arena->purge_expire);
   if (expire == 0) return false;
   if (!force && expire > now) return false;
 
+  // The expiration is reset to zero using a compare-and-swap operation. This ensures that the
+  // expiration is only reset if it hasn't been modified by another thread.
+  //
   // reset expire (if not already set concurrently)
   mi_atomic_casi64_strong_acq_rel(&arena->purge_expire, &expire, (mi_msecs_t)0);
 
+  // Flags are initialized: any_purged tracks if any blocks have been purged, and full_purge
+  // indicates whether the entire scheduled range was purged.
+  // The function iterates over all bitmap fields representing blocks scheduled for purging.
+  //
   // potential purges scheduled, walk through the bitmap
   bool any_purged = false;
   bool full_purge = true;
   for (size_t i = 0; i < arena->field_count; i++) {
+    // The function loads the purge bitmap for the current field. If there are no blocks marked for
+    // purging, it skips to the next field.
     size_t purge = mi_atomic_load_relaxed(&arena->blocks_purge[i]);
     if (purge != 0) {
+      // The inner loop counts consecutive bits set to 1 in the purge bitmask, which indicates
+      // blocks that need to be purged.
       size_t bitidx = 0;
       while (bitidx < MI_BITMAP_FIELD_BITS) {
         // find consequetive range of ones in the purge mask
@@ -829,6 +849,9 @@ static bool mi_arena_try_purge(mi_arena_t* arena, mi_msecs_t now, bool force, mi
         while (bitidx + bitlen < MI_BITMAP_FIELD_BITS && (purge & ((size_t)1 << (bitidx + bitlen))) != 0) {
           bitlen++;
         }
+        // For the identified range of blocks, the function attempts to claim the corresponding bits
+        // in the blocks_inuse bitmap. This is necessary to ensure that the blocks can be safely purged.
+        //
         // try to claim the longest range of corresponding in_use bits
         const mi_bitmap_index_t bitmap_index = mi_bitmap_index_create(i, bitidx);
         while( bitlen > 0 ) {
@@ -837,6 +860,11 @@ static bool mi_arena_try_purge(mi_arena_t* arena, mi_msecs_t now, bool force, mi
           }
           bitlen--;
         }
+        // After claiming the blocks, the function attempts to purge them using
+        // mi_arena_purge_range(). If not all blocks in the range were purged, full_purge is set to
+        // false.
+        // Regardless of whether the purge was successful, the claimed bits are released.
+        //
         // actual claimed bits at `in_use`
         if (bitlen > 0) {
           // read purge again now that we have the in_use bits
@@ -852,6 +880,9 @@ static bool mi_arena_try_purge(mi_arena_t* arena, mi_msecs_t now, bool force, mi
       } // while bitidx
     } // purge != 0
   }
+  // If the purging was not complete, a delay is set for the next purge attempt. This is done by
+  // updating the purge_expire using another compare-and-swap operation.
+  //
   // if not fully purged, make sure to purge again in the future
   if (!full_purge) {
     const long delay = mi_arena_purge_delay();
@@ -861,19 +892,44 @@ static bool mi_arena_try_purge(mi_arena_t* arena, mi_msecs_t now, bool force, mi
   return any_purged;
 }
 
+// To attempt purging memory blocks across multiple arenas. Purging can be forced or scheduled, and
+// the function ensures that only one thread purges at a time to prevent race conditions.
 static void mi_arenas_try_purge( bool force, bool visit_all, mi_stats_t* stats ) {
+  // The function first checks if the system is still preloading (a phase when memory purging should
+  // not occur) or if the purge delay is less than or equal to zero (indicating that purging is
+  // disabled). If either condition is true, the function returns early without doing anything.
   if (_mi_preloading() || mi_arena_purge_delay() <= 0) return;  // nothing will be scheduled
 
+  // The number of arenas in the system is loaded atomically. If there are no arenas (max_arena ==
+  // 0), the function returns without purging.
   const size_t max_arena = mi_atomic_load_acquire(&mi_arena_count);
   if (max_arena == 0) return;
 
+  // The function uses an atomic guard (purge_guard) to ensure that only one thread is allowed to
+  // purge at a time. This prevents multiple threads from trying to purge memory concurrently, which
+  // could lead to race conditions.
+  //
   // allow only one thread to purge at a time
   static mi_atomic_guard_t purge_guard;
   mi_atomic_guard(&purge_guard)
   {
+    // now = _mi_clock_now(): The current time is captured in milliseconds. This timestamp is used
+    // when checking whether it’s time to purge an arena.
     mi_msecs_t now = _mi_clock_now();
+    // If visit_all is true, the function will attempt to purge all arenas (up to max_arena).
+    // If visit_all is false, it will only attempt to purge a single arena.
     size_t max_purge_count = (visit_all ? max_arena : 1);
     for (size_t i = 0; i < max_arena; i++) {
+      // The loop iterates through all available arenas, loading each arena’s structure atomically.
+      // If the arena exists (i.e., it's not NULL), the function calls mi_arena_try_purge() to
+      // attempt purging it.
+      // mi_arena_try_purge(arena, now, force, stats): This function is called for each arena. It
+      // tries to purge the scheduled blocks in the arena, using the current time (now) to check
+      // whether purging should proceed or if it should wait.
+      // If mi_arena_try_purge() returns true (indicating successful purging of the arena), the
+      // function reduces the max_purge_count by 1.
+      // if (max_purge_count <= 1) break;: Once the function has purged as many arenas as allowed
+      // (max_purge_count), it exits the loop early.
       mi_arena_t* arena = mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[i]);
       if (arena != NULL) {
         if (mi_arena_try_purge(arena, now, force, stats)) {
