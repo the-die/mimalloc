@@ -947,12 +947,22 @@ static void mi_arenas_try_purge( bool force, bool visit_all, mi_stats_t* stats )
 ----------------------------------------------------------- */
 
 void _mi_arena_free(void* p, size_t size, size_t committed_size, mi_memid_t memid, mi_stats_t* stats) {
+  // The function checks that:
+  //   The size is greater than zero.
+  //   The stats pointer is not NULL.
+  //   The committed size is less than or equal to the total size.
+  //   The pointer p is not NULL.
+  // If any of these conditions fail, the function exits early.
   mi_assert_internal(size > 0 && stats != NULL);
   mi_assert_internal(committed_size <= size);
   if (p==NULL) return;
   if (size==0) return;
+  // Determine if all memory is committed.
   const bool all_committed = (committed_size == size);
 
+  // If the memory was allocated directly from the OS (as indicated by memid.memkind), it calls
+  // _mi_os_free() to free the memory.
+  // If only part of the memory was committed, it adjusts the committed statistics accordingly.
   if (mi_memkind_is_os(memid.memkind)) {
     // was a direct OS allocation, pass through
     if (!all_committed && committed_size > 0) {
@@ -962,6 +972,11 @@ void _mi_arena_free(void* p, size_t size, size_t committed_size, mi_memid_t memi
     _mi_os_free(p, size, memid, stats);
   }
   else if (memid.memkind == MI_MEM_ARENA) {
+    // If the memory was allocated from an arena, it determines the arena and bitmap index using
+    // memid.
+    // The arena is loaded atomically to ensure thread safety.
+    // The number of blocks corresponding to the size is computed.
+    //
     // allocated in an arena
     size_t arena_idx;
     size_t bitmap_idx;
@@ -971,6 +986,8 @@ void _mi_arena_free(void* p, size_t size, size_t committed_size, mi_memid_t memi
     mi_assert_internal(arena != NULL);
     const size_t blocks = mi_block_count_of_size(size);
 
+    // If the arena is invalid, an error message is printed, and the function exits.
+    //
     // checks
     if (arena == NULL) {
       _mi_error_message(EINVAL, "trying to free from an invalid arena: %p, size %zu, memid: 0x%zx\n", p, size, memid);
@@ -985,6 +1002,11 @@ void _mi_arena_free(void* p, size_t size, size_t committed_size, mi_memid_t memi
     // need to set all memory to undefined as some parts may still be marked as no_access (like padding etc.)
     mi_track_mem_undefined(p,size);
 
+    // If the arena is pinned or has no committed blocks, it checks that all memory is committed.
+    // If the memory is not fully committed, it marks the entire range as uncommitted and updates
+    // the statistics accordingly.
+    // The function then schedules a purge of the arena to reclaim the memory.
+    //
     // potentially decommit
     if (arena->memid.is_pinned || arena->blocks_committed == NULL) {
       mi_assert_internal(all_committed);
@@ -1010,6 +1032,9 @@ void _mi_arena_free(void* p, size_t size, size_t committed_size, mi_memid_t memi
       mi_arena_schedule_purge(arena, bitmap_idx, blocks, stats);
     }
 
+    // Finally, the function unclaims the blocks in use. If not all blocks were previously in use
+    // (indicating a double-free), an error is printed.
+    //
     // and make it available to others again
     bool all_inuse = _mi_bitmap_unclaim_across(arena->blocks_inuse, arena->field_count, blocks, bitmap_idx);
     if (!all_inuse) {
@@ -1022,6 +1047,9 @@ void _mi_arena_free(void* p, size_t size, size_t committed_size, mi_memid_t memi
     mi_assert_internal(memid.memkind < MI_MEM_OS);
   }
 
+  // After freeing the memory, the function attempts to purge any expired decommits to reclaim
+  // unused memory.
+  //
   // purge expired decommits
   mi_arenas_try_purge(false, false, stats);
 }
@@ -1029,18 +1057,37 @@ void _mi_arena_free(void* p, size_t size, size_t committed_size, mi_memid_t memi
 // destroy owned arenas; this is unsafe and should only be done using `mi_option_destroy_on_exit`
 // for dynamic libraries that are unloaded and need to release all their allocated memory.
 static void mi_arenas_unsafe_destroy(void) {
+  // The function begins by loading the total number of arenas (mi_arena_count) using atomic
+  // operations. This ensures a safe read of the current arena count.
   const size_t max_arena = mi_atomic_load_relaxed(&mi_arena_count);
   size_t new_max_arena = 0;
+  // The function iterates through each arena in the mi_arenas array up to max_arena, and attempts
+  // to load each arena (if it exists) using an atomic acquire operation for thread-safety.
   for (size_t i = 0; i < max_arena; i++) {
     mi_arena_t* arena = mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[i]);
+    // For each valid arena (arena != NULL), the function checks if:
+    //   The arena->start is not NULL (meaning the arena has a valid memory block).
+    //   The arena's memory kind (memid.memkind) indicates that the memory was allocated from the OS
+    //   (using mi_memkind_is_os()).
+    // If these conditions are met, the function:
+    //   Clears the arena: It atomically sets the pointer in mi_arenas[i] to NULL, which effectively
+    //   removes this arena from the list.
+    //   Frees the memory: The actual memory allocated for the arena (arena->start) is freed by
+    //   calling _mi_os_free(). This function also updates the memory statistics (_mi_stats_main).
     if (arena != NULL) {
       if (arena->start != NULL && mi_memkind_is_os(arena->memid.memkind)) {
         mi_atomic_store_ptr_release(mi_arena_t, &mi_arenas[i], NULL);
         _mi_os_free(arena->start, mi_arena_size(arena), arena->memid, &_mi_stats_main);
       }
       else {
+        // If the arena was not destroyed, the function updates new_max_arena to track the highest
+        // valid arena index. This value will be used later to potentially reduce the number of
+        // tracked arenas.
         new_max_arena = i;
       }
+      // Regardless of whether the arena's memory was OS-allocated or not, the function calls
+      // mi_arena_meta_free() to free the memory used for metadata (the structure itself and any
+      // associated memory).
       mi_arena_meta_free(arena, arena->meta_memid, arena->meta_size, &_mi_stats_main);
     }
   }
@@ -1064,9 +1111,25 @@ void _mi_arena_unsafe_destroy_all(mi_stats_t* stats) {
 
 // Is a pointer inside any of our arenas?
 bool _mi_arena_contains(const void* p) {
+  // The function first loads the total number of arenas using mi_atomic_load_relaxed to get the
+  // current count of arenas. This count is stored in mi_arena_count.
+  // Atomic loading ensures that the number of arenas is read in a thread-safe manner, but the
+  // "relaxed" memory ordering means no additional synchronization is enforced beyond the read.
   const size_t max_arena = mi_atomic_load_relaxed(&mi_arena_count);
+  // The function loops through all the arenas from index 0 to max_arena - 1.
+  // For each index, it loads the pointer to the arena structure using mi_atomic_load_ptr_acquire.
+  // The acquire operation ensures that the memory reads for the arena's fields are visible after
+  // the pointer is loaded (providing a synchronization guarantee for thread safety).
   for (size_t i = 0; i < max_arena; i++) {
     mi_arena_t* arena = mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[i]);
+    // For each arena, it checks:
+    //   If the arena is not NULL.
+    //   If the pointer p falls within the range of memory allocated by this arena.
+    // The condition checks whether:
+    //   arena->start <= p: The pointer is greater than or equal to the start of the arena's memory.
+    //   arena->start + mi_arena_block_size(arena->block_count) > p: The pointer is less than the
+    //   end of the arena's memory, which is calculated as the start address of the arena plus the
+    //   total size of the blocks in the arena (mi_arena_block_size(arena->block_count)).
     if (arena != NULL && arena->start <= (const uint8_t*)p && arena->start + mi_arena_block_size(arena->block_count) > (const uint8_t*)p) {
       return true;
     }
@@ -1091,11 +1154,19 @@ size_t _mi_arena_segment_abandoned_count(void) {
   return mi_atomic_load_relaxed(&abandoned_count);
 }
 
+// The function returns a boolean indicating success (true) or failure (false) in reclaiming the
+// abandoned segment.
+//
 // reclaim a specific abandoned segment; `true` on success.
 // sets the thread_id.
 bool _mi_arena_segment_clear_abandoned(mi_segment_t* segment ) 
 {
+  // If the segment does not belong to an arena, it is treated as un-abandoned, and the function
+  // attempts to claim it atomically using the thread ID.
   if (segment->memid.memkind != MI_MEM_ARENA) {
+    // This line uses an atomic compare-and-swap operation to set the thread ID if it is currently
+    // 0. If successful, it decrements the abandoned_count and returns true.
+    //
     // not in an arena, consider it un-abandoned now.
     // but we need to still claim it atomically -- we use the thread_id for that.
     size_t expected = 0;
@@ -1107,6 +1178,7 @@ bool _mi_arena_segment_clear_abandoned(mi_segment_t* segment )
       return false;
     }
   }
+  // If the segment belongs to an arena, the function retrieves the arena index and bitmap index.
   // arena segment: use the blocks_abandoned bitmap.
   size_t arena_idx;
   size_t bitmap_idx;
@@ -1114,7 +1186,10 @@ bool _mi_arena_segment_clear_abandoned(mi_segment_t* segment )
   mi_assert_internal(arena_idx < MI_MAX_ARENAS);
   mi_arena_t* arena = mi_atomic_load_ptr_acquire(mi_arena_t, &mi_arenas[arena_idx]);
   mi_assert_internal(arena != NULL);
+  //  The function tries to unclaim the segment from the abandoned bitmap.
   bool was_marked = _mi_bitmap_unclaim(arena->blocks_abandoned, arena->field_count, 1, bitmap_idx);
+  // If was_marked is true, it ensures that the thread ID was 0 (indicating the segment was truly
+  // abandoned) and decrements the abandoned count.
   if (was_marked) { 
     mi_assert_internal(mi_atomic_load_relaxed(&segment->thread_id) == 0);
     mi_atomic_decrement_relaxed(&abandoned_count); 
